@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Play } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import MetricCard from '../components/MetricCard'
 import StatusBadge from '../components/StatusBadge'
 import { LoadingSpinner, ErrorState } from '../components/LoadingState'
@@ -207,7 +207,6 @@ export default function Pipeline() {
   const stats = usePipelineStats()
   const runs = usePipelineRuns()
   const [expandedRun, setExpandedRun] = useState<string | null>(null)
-  const [triggering, setTriggering] = useState(false)
   const [tab, setTab] = useState<'architecture' | 'runs' | 'stats'>('architecture')
 
   if (stats.isLoading) return <LoadingSpinner />
@@ -215,32 +214,13 @@ export default function Pipeline() {
 
   const s = stats.data
 
-  const handleTrigger = async () => {
-    setTriggering(true)
-    try {
-      const base = import.meta.env.VITE_API_URL ?? ''
-      await fetch(`${base}/api/pipeline/trigger`, { method: 'POST' })
-      await Promise.all([stats.refetch(), runs.refetch()])
-    } catch {
-      // handle silently
-    } finally {
-      setTriggering(false)
-    }
-  }
-
   return (
     <div className="animate-slide-up">
-      <div className="pt-2 pb-6 flex items-start justify-between">
-        <div>
-          <h1 className="page-title">How It Works</h1>
-          <p className="page-caption">
-            A look inside the system: what it does, how often it runs, and what it costs
-          </p>
-        </div>
-        <button onClick={handleTrigger} disabled={triggering} className="btn-primary">
-          <Play size={14} />
-          {triggering ? 'Running...' : 'Run Pipeline'}
-        </button>
+      <div className="pt-2 pb-6">
+        <h1 className="page-title">How It Works</h1>
+        <p className="page-caption">
+          A look inside the system: what it does, how often it runs, and what it costs
+        </p>
       </div>
 
       {/* Metrics */}

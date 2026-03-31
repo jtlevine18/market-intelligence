@@ -111,7 +111,8 @@ export default function Dashboard() {
             </div>
             <Link
               to="/procurement"
-              className="ml-auto flex-shrink-0 btn-primary text-xs no-underline"
+              className="ml-auto flex-shrink-0 text-xs font-sans font-semibold uppercase px-4 py-2 rounded-md no-underline text-white"
+              style={{ background: '#2a9d8f', letterSpacing: '0.5px' }}
             >
               Review Recommendations
             </Link>
