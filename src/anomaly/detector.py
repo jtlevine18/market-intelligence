@@ -33,9 +33,6 @@ ANOMALY_FEATURES = [
     "is_rainy_season",
 ]
 
-REPORTING_QUALITY_ENC = {"good": 0, "moderate": 1, "poor": 2}
-
-
 class ConsumptionAnomalyDetector:
     """Isolation Forest for detecting anomalous drug consumption patterns.
 
@@ -109,7 +106,6 @@ class ConsumptionAnomalyDetector:
         if not self.is_trained():
             raise RuntimeError("Model not trained. Call train() first.")
 
-        available = [c for c in ANOMALY_FEATURES if c in features or True]
         X = pd.DataFrame([{c: features.get(c, 0) for c in ANOMALY_FEATURES}])
         X = X.fillna(0)
         X_scaled = self._scaler.transform(X)

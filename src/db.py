@@ -156,14 +156,21 @@ def get_session() -> Session | None:
     return _SessionLocal()
 
 
+_db_initialized = False
+
+
 def init_db() -> bool:
-    """Create all tables if they don't exist. Returns True on success."""
+    """Create all tables if they don't exist. Idempotent — only runs DDL once."""
+    global _db_initialized
+    if _db_initialized:
+        return True
     engine = get_engine()
     if engine is None:
         log.info("DATABASE_URL not set — running without persistence")
         return False
     try:
         Base.metadata.create_all(engine)
+        _db_initialized = True
         log.info("Database tables initialized")
         return True
     except Exception:

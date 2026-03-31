@@ -81,10 +81,9 @@ class ResidualCorrectionModel:
         from src.forecasting.model import FEATURE_COLS, CATEGORY_ENC
         from config import DRUG_MAP
 
-        X_primary = training_df[FEATURE_COLS].fillna(0)
         actuals = training_df["consumption_rate_per_1000"].fillna(0)
 
-        predictions = primary_model._model.predict(X_primary)
+        predictions = primary_model.predict_batch(training_df)
         residuals = actuals.values - predictions
 
         residual_df = training_df.copy()

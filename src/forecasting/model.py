@@ -28,6 +28,7 @@ from config import (
     FACILITY_MAP,
     ESSENTIAL_MEDICINES,
     DRUG_MAP,
+    LEAD_TIMES,
     HealthFacility,
 )
 from src.ingestion.lmis_simulator import (
@@ -92,8 +93,7 @@ DISEASE_CATEGORY_MAP = {
 # Reporting quality encoding
 REPORTING_QUALITY_ENC = {"good": 0, "moderate": 1, "poor": 2}
 
-# Supply source to lead time mapping
-LEAD_TIME_MAP = {"central_warehouse": 7, "regional_depot": 14, "international": 45}
+LEAD_TIME_MAP = LEAD_TIMES
 
 
 def _generate_climate_for_month(
@@ -172,6 +172,14 @@ class XGBoostDemandModel:
         self._model_upper: xgb.XGBRegressor | None = None  # 90th percentile
         self._feature_importances: dict[str, float] = {}
         self._metrics: dict[str, float] = {}
+
+    @property
+    def metrics(self) -> dict[str, float]:
+        return self._metrics
+
+    @property
+    def feature_importances(self) -> dict[str, float]:
+        return self._feature_importances
 
     def is_trained(self) -> bool:
         return self._model is not None
@@ -444,6 +452,16 @@ class XGBoostDemandModel:
             "prediction_interval_upper": round(max(0, pred_upper), 2),
             "feature_importances": self._feature_importances,
         }
+
+    def predict_batch(self, df: pd.DataFrame) -> np.ndarray:
+        """Predict consumption rates for a batch of rows (vectorized).
+
+        Returns array of predicted_consumption_per_1000 values.
+        """
+        if not self.is_trained():
+            raise RuntimeError("Model not trained. Call train() first.")
+        X = df[FEATURE_COLS].fillna(0)
+        return self._model.predict(X)
 
     def save(self, path: str | Path | None = None) -> str:
         """Save trained model to disk."""

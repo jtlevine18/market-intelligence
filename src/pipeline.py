@@ -26,9 +26,9 @@ from config import (
     DEFAULT_PARAMS,
 )
 from src.ingestion.nasa_power import fetch_all_facilities_nasa_power, DailyReading
-from src.ingestion.lmis_simulator import simulate_all_facilities, StockReading
+from src.ingestion.lmis_simulator import simulate_all_facilities, StockReading, _get_season
 from src.forecasting.demand import forecast_demand, forecast_to_dicts, DemandForecast
-from src.forecasting.model import XGBoostDemandModel
+from src.forecasting.model import XGBoostDemandModel, FACILITY_TYPE_ENC, CATEGORY_ENC
 from src.forecasting.residual_model import ResidualCorrectionModel
 from src.anomaly.detector import ConsumptionAnomalyDetector
 from src.optimizer import optimize, plan_to_dict, ProcurementPlan
@@ -697,6 +697,7 @@ class HealthSupplyChainPipeline:
             model_type = "epidemiological_formulas"
             xgb_model = XGBoostDemandModel()
             residual_model = ResidualCorrectionModel()
+            training_df = None  # cached for reuse by residual model
 
             try:
                 xgb_model.load()
@@ -704,8 +705,8 @@ class HealthSupplyChainPipeline:
                 logger.info("Loaded pre-trained XGBoost model")
             except FileNotFoundError:
                 logger.info("No pre-trained XGBoost model — training on the fly")
-                df = xgb_model.build_training_data(months_back=6, seed=42)
-                xgb_model.train(df)
+                training_df = xgb_model.build_training_data(months_back=6, seed=42)
+                xgb_model.train(training_df)
                 xgb_model.save()
                 model_type = "xgboost"
 
@@ -716,19 +717,23 @@ class HealthSupplyChainPipeline:
                 logger.info("Loaded pre-trained residual correction model")
             except FileNotFoundError:
                 if xgb_model.is_trained():
-                    df = xgb_model.build_training_data(months_back=6, seed=42)
-                    res_df = residual_model.build_residual_data(xgb_model, df)
-                    residual_model.train(res_df)
-                    residual_model.save()
-                    model_type = "xgboost+residual_correction"
+                    try:
+                        if training_df is None:
+                            training_df = xgb_model.build_training_data(months_back=6, seed=42)
+                        res_df = residual_model.build_residual_data(xgb_model, training_df)
+                        residual_model.train(res_df)
+                        residual_model.save()
+                        model_type = "xgboost+residual_correction"
+                    except Exception:
+                        logger.warning("Residual model training failed — continuing with primary only")
 
             # Model metrics from trained models
             self._model_metrics = {
                 "model_type": model_type,
-                "primary_model": xgb_model._metrics if xgb_model.is_trained() else {},
+                "primary_model": xgb_model.metrics if xgb_model.is_trained() else {},
                 "residual_model": residual_model.metrics if residual_model.is_trained() else {},
-                "features": list(xgb_model._feature_importances.keys()) if xgb_model.is_trained() else [],
-                "feature_importances": xgb_model._feature_importances if xgb_model.is_trained() else {},
+                "features": list(xgb_model.feature_importances.keys()) if xgb_model.is_trained() else [],
+                "feature_importances": xgb_model.feature_importances if xgb_model.is_trained() else {},
             }
 
             return StepResult(
@@ -1100,23 +1105,33 @@ class HealthSupplyChainPipeline:
             if self._procurement:
                 procurement_reasoning = self._procurement.reasoning_trace
 
-            # Run anomaly detection on stock levels
+            # Run anomaly detection on stock levels (batch scoring)
             try:
                 detector = ConsumptionAnomalyDetector()
                 detector.load()
+                import pandas as _pd
+                from datetime import date as _date
+                now = datetime.utcnow()
+                rows = []
                 for sl in stock_levels:
-                    score_result = detector.score({
+                    fac = FACILITY_MAP.get(sl["facility_id"], FACILITIES[0])
+                    drug = DRUG_MAP.get(sl.get("drug_id", ""), {})
+                    season = _get_season(_date(now.year, now.month, 15), fac.latitude)
+                    rows.append({
                         "consumption_rate_per_1000": sl.get("consumption_daily", 0) * 30,
                         "consumption_last_month": sl.get("consumption_daily", 0) * 30,
                         "consumption_trend": 1.0,
-                        "population_served": FACILITY_MAP.get(sl["facility_id"], FACILITIES[0]).population_served,
-                        "facility_type_encoded": 1,
-                        "drug_category_encoded": 0,
-                        "month": datetime.utcnow().month,
-                        "is_rainy_season": 1,
+                        "population_served": fac.population_served,
+                        "facility_type_encoded": FACILITY_TYPE_ENC.get(fac.facility_type, 1),
+                        "drug_category_encoded": CATEGORY_ENC.get(drug.get("category", ""), 0),
+                        "month": now.month,
+                        "is_rainy_season": 1 if season == "rainy" else 0,
                     })
-                    sl["anomaly_score"] = score_result["anomaly_score"]
-                    sl["is_anomaly"] = score_result["is_anomaly"]
+                if rows:
+                    scored = detector.score_batch(_pd.DataFrame(rows))
+                    for i, sl in enumerate(stock_levels):
+                        sl["anomaly_score"] = float(scored["anomaly_score"].iloc[i])
+                        sl["is_anomaly"] = bool(scored["is_anomaly"].iloc[i])
             except Exception:
                 logger.debug("Anomaly detector not available — skipping scoring")
 
