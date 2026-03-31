@@ -60,34 +60,34 @@ export default function Inputs() {
   return (
     <div className="animate-slide-up">
       <div data-tour="inputs-title" className="pt-2 pb-6">
-        <h1 className="page-title">Data Inputs &mdash; AI Extraction</h1>
+        <h1 className="page-title">Facility Data</h1>
         <p className="page-caption">
-          Raw facility reports transformed into structured data by AI agents
+          AI reads messy stock reports from health facilities and turns them into reliable numbers
         </p>
       </div>
 
       <div data-tour="inputs-metrics" className="mb-8">
-        <div className="section-header">Extraction Summary</div>
+        <div className="section-header">Data Overview</div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-stagger">
           <MetricCard
-            label="Facilities Reporting"
+            label="Reports Received"
             value={totalFacilities}
-            subtitle="stock reports received"
+            subtitle="facilities reporting"
           />
           <MetricCard
-            label="Conflicts Found"
+            label="Discrepancies Found"
             value={totalConflicts}
-            subtitle="cross-source discrepancies"
+            subtitle="corrected automatically"
           />
           <MetricCard
-            label="Extraction Method"
-            value="Claude"
-            subtitle="LLM-based parsing"
+            label="Processing"
+            value="AI-Powered"
+            subtitle="reads unstructured text"
           />
           <MetricCard
-            label="Avg Data Quality"
+            label="Data Reliability"
             value={`${Math.round(avgQuality * 100)}%`}
-            subtitle="after reconciliation"
+            subtitle="after verification"
           />
         </div>
       </div>
@@ -118,7 +118,7 @@ export default function Inputs() {
         >
           {/* LEFT: Raw Input */}
           <div className="space-y-4">
-            <div className="section-header">Raw Input</div>
+            <div className="section-header">Report as Received</div>
 
             {/* Stock report — paper-like */}
             <div
@@ -181,7 +181,7 @@ export default function Inputs() {
 
           {/* RIGHT: Extracted + Reconciled Data */}
           <div className="space-y-4">
-            <div className="section-header">Extracted Data</div>
+            <div className="section-header">What the AI Found</div>
 
             {/* Stock table */}
             {extractedFacility && (
@@ -283,7 +283,7 @@ export default function Inputs() {
               reconciledFacility.conflicts.length > 0 && (
                 <div data-tour="inputs-conflicts">
                   <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2">
-                    Data Conflicts
+                    Discrepancies Detected
                   </p>
                   <div className="space-y-3">
                     {reconciledFacility.conflicts.map((conflict, i) => (
@@ -335,7 +335,7 @@ export default function Inputs() {
               <div className="card card-body">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0">
-                    Data Quality Score
+                    Data Reliability Score
                   </p>
                   <span
                     className="text-lg font-serif font-bold"

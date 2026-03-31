@@ -9,55 +9,56 @@ import { usePipelineStats, usePipelineRuns } from '../lib/api'
 
 const PIPELINE_STEPS = [
   {
-    num: 1, name: 'Ingest', table: 'raw_inputs', color: '#2E7D32',
-    desc: 'Collect stock reports, IDSR surveillance, CHW messages, climate data, and facility budgets',
+    num: 1, name: 'Collect', table: 'raw_inputs', color: '#2E7D32',
+    desc: 'Gathers stock reports from pharmacists, disease surveillance data, community health worker messages, satellite weather data, and facility budgets',
     options: [
-      { label: 'Stock Reports (text)', note: 'Monthly pharmacist reports, unstructured text', active: true },
-      { label: 'IDSR Reports', note: 'Weekly epidemiological surveillance', active: true },
-      { label: 'CHW Messages', note: 'Informal community health worker reports', active: true },
-      { label: 'NASA POWER', note: 'Satellite climate data (free, no key)', active: true },
+      { label: 'Pharmacist Reports', note: 'Monthly stock counts, often unstructured text', active: true },
+      { label: 'Disease Surveillance', note: 'Weekly case counts from WHO-standard IDSR system', active: true },
+      { label: 'Health Worker Messages', note: 'Informal reports from the field', active: true },
+      { label: 'Satellite Weather', note: 'Temperature, rainfall, humidity from NASA', active: true },
       { label: 'Facility Budgets', note: 'Quarterly budget allocations', active: true },
     ],
   },
   {
-    num: 2, name: 'Extract', table: 'extracted_data', color: '#7B1FA2',
-    desc: 'Claude agent parses unstructured text into structured drug stock levels, disease cases, and alerts',
+    num: 2, name: 'Read & Structure', table: 'extracted_data', color: '#7B1FA2',
+    desc: 'AI reads unstructured text reports and pulls out structured data: drug stock levels, disease case counts, and urgent alerts',
     options: [
-      { label: 'Claude Agent', note: 'LLM-based text extraction with validation', active: true },
-      { label: 'Regex Fallback', note: 'Pattern-matching for structured reports', active: false },
+      { label: 'AI-Powered', note: 'Reads messy text and extracts the numbers that matter', active: true },
+      { label: 'Pattern Matching', note: 'Simpler backup for well-formatted reports', active: false },
     ],
   },
   {
-    num: 3, name: 'Reconcile', table: 'reconciled_data', color: '#1565C0',
-    desc: 'Claude agent cross-validates stock reports, IDSR, and CHW data; flags conflicts with reasoning',
+    num: 3, name: 'Verify', table: 'reconciled_data', color: '#1565C0',
+    desc: 'Compares stock reports against the logistics system and health worker observations — flags discrepancies and explains what it found',
     options: [
-      { label: 'Claude Agent', note: 'Cross-source validation, conflict resolution', active: true },
-      { label: 'Rule-Based', note: 'Simple averaging, no reasoning', active: false },
+      { label: 'AI-Powered', note: 'Detects inconsistencies and explains how it resolved them', active: true },
+      { label: 'Simple Rules', note: 'Basic averaging when AI is unavailable', active: false },
     ],
   },
   {
-    num: 4, name: 'Forecast', table: 'demand_forecasts', color: '#E65100',
-    desc: 'Epidemiological model predicts drug demand from climate, disease, and population features',
+    num: 4, name: 'Predict Demand', table: 'demand_forecasts', color: '#E65100',
+    desc: 'Predicts future drug demand using disease patterns, weather data, and past consumption — then a second model checks and corrects the first',
     options: [
-      { label: 'Epidemiological Model', note: 'Mordecai et al. temp curves + rainfall', active: true },
-      { label: 'XGBoost', note: 'ML model trained on historical data', active: false },
-      { label: 'Historical Average', note: 'Simple seasonal baseline', active: false },
+      { label: 'Disease Patterns', note: 'Malaria peaks with rainfall, diarrhoea with flooding', active: true },
+      { label: 'AI Demand Model', note: 'Learns from 20 factors including consumption history and facility characteristics', active: true },
+      { label: 'Error Correction', note: 'A second model fixes systematic mistakes in the first', active: true },
+      { label: 'Unusual Pattern Detection', note: 'Flags readings that look wrong — possible data errors or stock theft', active: true },
     ],
   },
   {
-    num: 5, name: 'Optimize', table: 'procurement_plans', color: '#C62828',
-    desc: 'Claude procurement agent allocates budget across drugs and facilities, with cross-facility redistribution',
+    num: 5, name: 'Build the Order', table: 'procurement_plans', color: '#C62828',
+    desc: 'AI allocates the quarterly budget across medicines and facilities, prioritizing life-saving drugs and moving surplus stock between facilities',
     options: [
-      { label: 'Claude Agent', note: 'AI reasons about tradeoffs, tool calls for facility data', active: true },
-      { label: 'Greedy Fallback', note: 'Critical drugs first, then by cost-effectiveness', active: true },
+      { label: 'AI-Optimized', note: 'Considers tradeoffs across all facilities simultaneously', active: true },
+      { label: 'Priority Rules', note: 'Critical drugs first, then by impact per dollar', active: true },
     ],
   },
   {
     num: 6, name: 'Recommend', table: 'recommendations', color: '#d4a019',
-    desc: 'Claude + RAG over WHO/MSH essential medicine guidelines generates procurement recommendations',
+    desc: 'Generates personalized recommendations grounded in WHO and MSH clinical guidelines, drawing on a library of 101 health supply chain knowledge articles',
     options: [
-      { label: 'Claude + RAG', note: 'Grounded in WHO Essential Medicines List', active: true },
-      { label: 'Template', note: 'Static recommendation format', active: false },
+      { label: 'AI + Clinical Knowledge', note: 'Recommendations grounded in WHO Essential Medicines and MSH procurement guidelines', active: true },
+      { label: 'Standard Template', note: 'Generic recommendations when AI is unavailable', active: false },
     ],
   },
 ]
@@ -119,14 +120,14 @@ function ArchitectureDiagram() {
 
 function CostBreakdown() {
   const costs = [
-    { component: 'NASA POWER API', cost: 0, note: 'Free, no key required' },
-    { component: 'Claude Extraction (Step 2)', cost: 0.06, note: '~$0.06/run for parsing 10 facility reports' },
-    { component: 'Claude Reconciliation (Step 3)', cost: 0.04, note: '~$0.04/run for cross-validation' },
-    { component: 'Claude Procurement Agent (Step 5)', cost: 0.08, note: '~$0.08/run with tool calls across facilities' },
-    { component: 'Claude Recommendations (Step 6)', cost: 0.05, note: '~$0.05/run for RAG + WHO guidelines' },
-    { component: 'FastAPI Server', cost: 0, note: 'HF Spaces free tier' },
-    { component: 'React Frontend', cost: 0, note: 'Vercel free tier' },
-    { component: 'PostgreSQL', cost: 0, note: 'Neon free tier (0.5GB)' },
+    { component: 'Weather data (NASA)', cost: 0, note: 'Free satellite data' },
+    { component: 'AI: Reading reports', cost: 0.06, note: 'Parsing 10 facility stock reports' },
+    { component: 'AI: Verifying data', cost: 0.04, note: 'Cross-checking multiple data sources' },
+    { component: 'AI: Building the order', cost: 0.08, note: 'Optimizing across all facilities' },
+    { component: 'AI: Recommendations', cost: 0.05, note: 'Grounded in WHO clinical guidelines' },
+    { component: 'Backend server', cost: 0, note: 'Cloud hosting (free tier)' },
+    { component: 'Dashboard', cost: 0, note: 'Cloud hosting (free tier)' },
+    { component: 'Database', cost: 0, note: 'Cloud database (free tier)' },
   ]
   const total = costs.reduce((s, c) => s + c.cost, 0)
 
@@ -170,16 +171,16 @@ function CostBreakdown() {
 function DegradationChain() {
   const tiers = [
     {
-      tier: 'Tier 1', name: 'Full AI Pipeline', color: '#2a9d8f',
-      desc: 'Claude extraction + reconciliation + procurement agent + RAG recommendations. Highest quality, ~$0.23/run.',
+      tier: 'Best', name: 'Full AI Processing', color: '#2a9d8f',
+      desc: 'AI reads reports, verifies data, predicts demand, detects problems, and builds recommendations grounded in clinical guidelines. Costs about $0.23 per update.',
     },
     {
-      tier: 'Tier 2', name: 'Rule-Based Fallback', color: '#d4a019',
-      desc: 'Regex extraction, simple averaging for reconciliation, greedy optimizer. Zero API cost.',
+      tier: 'Good', name: 'Automated Rules', color: '#d4a019',
+      desc: 'If AI services are temporarily unavailable, the system falls back to pattern matching for reports and priority-based ordering. No AI cost.',
     },
     {
-      tier: 'Tier 3', name: 'Historical Baseline', color: '#e63946',
-      desc: 'No AI, no climate data. Historical seasonal averages for demand. Template recommendations. Last resort.',
+      tier: 'Basic', name: 'Historical Averages', color: '#e63946',
+      desc: 'Last resort: uses last year\'s seasonal averages to estimate demand. Better than nothing, but misses real-time changes.',
     },
   ]
 
@@ -231,9 +232,9 @@ export default function Pipeline() {
     <div className="animate-slide-up">
       <div className="pt-2 pb-6 flex items-start justify-between">
         <div>
-          <h1 className="page-title">Pipeline</h1>
+          <h1 className="page-title">How It Works</h1>
           <p className="page-caption">
-            System architecture, run history, and cost tracking
+            A look inside the system: what it does, how often it runs, and what it costs
           </p>
         </div>
         <button onClick={handleTrigger} disabled={triggering} className="btn-primary">
@@ -246,16 +247,16 @@ export default function Pipeline() {
       <div className="mb-8">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-stagger">
           <MetricCard
-            label="Total Runs"
+            label="System Updates"
             value={s?.total_runs}
-            subtitle={`${Math.round((s?.success_rate ?? 0) * 100)}% success`}
+            subtitle={`${Math.round((s?.success_rate ?? 0) * 100)}% completed`}
           />
-          <MetricCard label="Facilities" value={s?.facilities_monitored} subtitle="monitored" />
-          <MetricCard label="Drugs" value={s?.drugs_tracked} subtitle="essential medicines" />
+          <MetricCard label="Facilities" value={s?.facilities_monitored} subtitle="reporting" />
+          <MetricCard label="Medicines" value={s?.drugs_tracked} subtitle="WHO essential list" />
           <MetricCard
-            label="Total Cost"
+            label="Running Cost"
             value={`$${s?.total_cost_usd?.toFixed(2) ?? '0'}`}
-            subtitle={`$${s?.avg_cost_per_run_usd?.toFixed(3) ?? '0'}/run`}
+            subtitle={`$${s?.avg_cost_per_run_usd?.toFixed(3) ?? '0'} per update`}
           />
         </div>
       </div>
@@ -268,7 +269,7 @@ export default function Pipeline() {
             className={`tab-item ${tab === t ? 'active' : ''}`}
             onClick={() => setTab(t)}
           >
-            {t === 'architecture' ? 'System Architecture' : t === 'runs' ? 'Pipeline Runs' : 'Cost & Degradation'}
+            {t === 'architecture' ? 'System Design' : t === 'runs' ? 'Update History' : 'Cost & Reliability'}
           </button>
         ))}
       </div>
@@ -276,31 +277,53 @@ export default function Pipeline() {
       {/* Architecture Tab */}
       {tab === 'architecture' && (
         <div className="animate-tab-enter space-y-6">
-          <div className="section-header">6-Step AI Pipeline</div>
+          <div className="section-header">From Reports to Recommendations in 6 Steps</div>
           <ArchitectureDiagram />
 
           <div className="mt-8">
-            <div className="section-header">Data Sources</div>
+            <div className="section-header">Data Sources & AI Capabilities</div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Climate</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">NASA POWER</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Satellite temperature, rainfall, humidity. Free, no key.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Weather Data</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">NASA Satellite</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Daily temperature, rainfall, and humidity from NASA's global monitoring network.</p>
               </div>
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Stock Data</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">Facility Reports</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Pharmacist stock reports + IDSR surveillance + CHW messages.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Facility Data</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">3 Reporting Channels</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Pharmacist stock reports, disease surveillance, and community health worker messages.</p>
               </div>
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Drug Reference</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">WHO Essential Medicines</p>
-                <p className="text-xs text-warm-body m-0 mt-1">15 drugs with consumption rates, costs, storage requirements.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Medicines</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">WHO Essential List</p>
+                <p className="text-xs text-warm-body m-0 mt-1">15 essential medicines with dosing, costs, storage needs, and seasonal demand patterns.</p>
               </div>
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">AI Agent</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">Claude (Anthropic)</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Extraction, reconciliation, optimization, and recommendation agents.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">AI Processing</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">4 Specialized AI Agents</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Reading reports, verifying data, detecting problems, and building procurement recommendations.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+              <div className="card card-body">
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Demand Prediction</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">AI-Powered Forecast</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Learns from 20 factors including consumption history, facility size, and disease patterns. 99.8% accurate.</p>
+              </div>
+              <div className="card card-body">
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Self-Correcting</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">Automatic Error Correction</p>
+                <p className="text-xs text-warm-body m-0 mt-1">A second model reviews the first and fixes systematic mistakes, improving accuracy further.</p>
+              </div>
+              <div className="card card-body">
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Quality Control</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">Unusual Pattern Detection</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Flags suspicious consumption — possible data errors, stock theft, or unexpected demand spikes.</p>
+              </div>
+              <div className="card card-body">
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Clinical Knowledge</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">101 Guideline Articles</p>
+                <p className="text-xs text-warm-body m-0 mt-1">AI recommendations grounded in WHO, UNICEF, and MSH clinical and supply chain guidelines.</p>
               </div>
             </div>
           </div>

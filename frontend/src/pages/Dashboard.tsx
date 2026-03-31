@@ -22,26 +22,26 @@ export default function Dashboard() {
       <div data-tour="hero" className="pt-2 pb-6">
         <h1 className="page-title">Health Supply Chain Optimizer</h1>
         <p className="page-caption">
-          Agentic procurement planning for district health facilities
+          Keeping essential medicines in stock at district health facilities across West Africa
         </p>
       </div>
 
       {/* Stage Cards */}
       <div data-tour="stage-cards" className="mb-8">
-        <div className="section-header">Pipeline Stages</div>
+        <div className="section-header">How It Works</div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-center">
           <Link to="/inputs" className="stage-card no-underline">
             <div className="flex items-center gap-3 mb-2">
               <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
                 <Package size={18} className="text-info" />
               </div>
-              <h3 className="text-sm font-semibold text-[#1a1a1a] font-sans m-0">Data Inputs</h3>
+              <h3 className="text-sm font-semibold text-[#1a1a1a] font-sans m-0">Collect & Verify</h3>
             </div>
             <p className="text-xs text-warm-body leading-relaxed m-0">
-              AI agents extract structured data from stock reports, IDSR surveillance, and CHW messages
+              AI reads facility stock reports, disease surveillance, and health worker messages — and checks the numbers add up
             </p>
             <div className="mt-3 flex items-center gap-1.5 text-[10px] text-warm-muted uppercase tracking-wider font-semibold">
-              {s?.facilities_monitored ?? 0} facilities
+              {s?.facilities_monitored ?? 0} facilities reporting
             </div>
           </Link>
 
@@ -54,13 +54,13 @@ export default function Dashboard() {
               <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
                 <TrendingUp size={18} className="text-warning" />
               </div>
-              <h3 className="text-sm font-semibold text-[#1a1a1a] font-sans m-0">Demand Forecast</h3>
+              <h3 className="text-sm font-semibold text-[#1a1a1a] font-sans m-0">Predict Demand</h3>
             </div>
             <p className="text-xs text-warm-body leading-relaxed m-0">
-              Climate-driven demand predictions using rainfall, temperature, and disease seasonality
+              Forecasts which drugs will be needed most, based on disease patterns, weather, and past consumption
             </p>
             <div className="mt-3 flex items-center gap-1.5 text-[10px] text-warm-muted uppercase tracking-wider font-semibold">
-              {s?.drugs_tracked ?? 0} drugs tracked
+              {s?.drugs_tracked ?? 0} medicines tracked
             </div>
           </Link>
 
@@ -73,13 +73,13 @@ export default function Dashboard() {
               <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center">
                 <ShoppingCart size={18} className="text-error" />
               </div>
-              <h3 className="text-sm font-semibold text-[#1a1a1a] font-sans m-0">Procurement Plan</h3>
+              <h3 className="text-sm font-semibold text-[#1a1a1a] font-sans m-0">Build the Order</h3>
             </div>
             <p className="text-xs text-warm-body leading-relaxed m-0">
-              Budget-constrained procurement optimization prioritizing critical essential medicines
+              Allocates the quarterly budget across medicines, making sure life-saving drugs are covered first
             </p>
             <div className="mt-3 flex items-center gap-1.5 text-[10px] text-warm-muted uppercase tracking-wider font-semibold">
-              {s?.high_risk_stockouts ?? 0} stockout risks
+              {s?.high_risk_stockouts ?? 0} at risk of stockout
             </div>
           </Link>
         </div>
@@ -90,24 +90,24 @@ export default function Dashboard() {
         <div className="section-header">Current Status</div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-stagger">
           <MetricCard
-            label="Facilities Monitored"
+            label="Facilities Reporting"
             value={s?.facilities_monitored}
-            subtitle="across West Africa"
+            subtitle="across Nigeria & Ghana"
           />
           <MetricCard
-            label="Active Stockout Risks"
+            label="Stockout Warnings"
             value={s?.high_risk_stockouts}
-            subtitle="drugs at risk"
+            subtitle="medicines at risk"
           />
           <MetricCard
-            label="Drugs Tracked"
+            label="Medicines Tracked"
             value={s?.drugs_tracked}
-            subtitle="essential medicines"
+            subtitle="WHO essential list"
           />
           <MetricCard
-            label="Pipeline Runs"
+            label="System Updates"
             value={s?.total_runs}
-            subtitle={`${Math.round((s?.success_rate ?? 0) * 100)}% success`}
+            subtitle={`${Math.round((s?.success_rate ?? 0) * 100)}% completed`}
           />
         </div>
       </div>
@@ -120,7 +120,7 @@ export default function Dashboard() {
           style={{ borderBottom: '2px solid #d4a019', paddingBottom: 8, marginBottom: 16 }}
         >
           {showRuns ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          Run History
+          Update History
         </button>
         {showRuns && (
           <div className="animate-tab-enter">

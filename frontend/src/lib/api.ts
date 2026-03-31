@@ -75,17 +75,62 @@ export interface ReconciledDataResponse {
   source: string
 }
 
+export interface MLModelMetrics {
+  rmse?: number
+  mae?: number
+  r2?: number
+  train_samples?: number
+  test_samples?: number
+  feature_importances?: Record<string, number>
+}
+
+export interface ResidualMetrics {
+  rmse_residual_before?: number
+  rmse_residual_after?: number
+  rmse_improvement_pct?: number
+  r2_residual?: number
+  features_used?: string[]
+  feature_importances?: Record<string, number>
+}
+
+export interface MLStackInfo {
+  primary_model: {
+    type: string
+    features: number
+    training_samples?: number
+    metrics: MLModelMetrics
+  }
+  residual_correction: {
+    type: string
+    purpose: string
+    metrics: ResidualMetrics
+  }
+  anomaly_detection: {
+    type: string
+    purpose: string
+  }
+  rag: {
+    type: string
+    purpose: string
+  }
+  agents: Record<string, string>
+}
+
 export interface ModelInfoResponse {
   model_metrics: {
     model_type: string
-    model_source: string
-    features: string[]
-    rmse: number
-    mae: number
-    r_squared: number
-    feature_importances: Record<string, number>
-    note: string
+    primary_model?: MLModelMetrics
+    residual_model?: ResidualMetrics
+    features?: string[]
+    feature_importances?: Record<string, number>
+    // Legacy fields for epidemiological mode
+    model_source?: string
+    rmse?: number
+    mae?: number
+    r_squared?: number
+    note?: string
   }
+  ml_stack?: MLStackInfo
   source: string
 }
 
@@ -140,6 +185,8 @@ export interface StockLevel {
   days_of_stock: number
   stockout_risk: string
   date: string
+  anomaly_score?: number
+  is_anomaly?: boolean
 }
 
 export interface StockLevelsResponse {

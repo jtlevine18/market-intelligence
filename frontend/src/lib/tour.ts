@@ -4,40 +4,41 @@ export const tourSteps: Step[] = [
   // ── Dashboard ──
   {
     target: '[data-tour="hero"]',
-    title: 'Welcome to the Supply Chain Optimizer',
+    title: 'Welcome',
     content:
-      'This dashboard monitors a health supply chain pipeline for district health facilities in West Africa. ' +
-      'It ingests messy facility reports, uses Claude agents to extract and reconcile data, ' +
-      'forecasts climate-driven drug demand with an ML model, and generates budget-constrained procurement plans ' +
-      'across 10 facilities in Nigeria and Ghana.',
+      'This tool helps district health officers in West Africa keep essential medicines in stock. ' +
+      'It reads messy facility reports, predicts which drugs will run out, and recommends what to order — ' +
+      'across 10 real facilities in Nigeria and Ghana.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="stage-cards"]',
-    title: 'Six-stage AI pipeline',
+    title: 'From raw reports to an order plan',
     content:
-      'Data flows from raw text reports through AI extraction, reconciliation, ML forecasting, ' +
-      'agent-based procurement optimization, and RAG-powered recommendations.',
+      'Data moves through three stages: cleaning and verifying facility reports, ' +
+      'predicting future drug demand based on disease patterns, and building an optimized order ' +
+      'that fits the quarterly budget.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="metrics"]',
-    title: 'Live metrics',
+    title: 'Key numbers at a glance',
     content:
-      'Facilities monitored, active stockout risks, drugs tracked, and pipeline run counts ' +
-      'update after each pipeline execution.',
+      'How many facilities are reporting, which drugs are at risk of running out, ' +
+      'and how reliably the system is running. These update automatically after each run.',
     placement: 'top',
     disableBeacon: true,
   },
   // ── Inputs ──
   {
     target: '[data-tour="inputs-title"]',
-    title: 'AI data extraction',
+    title: 'Turning paperwork into data',
     content:
-      'Facility stock reports arrive as unstructured text. Claude agents parse stock levels, ' +
-      'disease surveillance reports, and informal CHW messages into structured data.',
+      'Facility pharmacists send stock counts as unstructured text — sometimes handwritten, ' +
+      'sometimes a WhatsApp message. AI reads these reports and pulls out the numbers that matter: ' +
+      'how much of each drug is left, and how fast it\'s being used.',
     placement: 'bottom',
     disableBeacon: true,
   },
@@ -45,63 +46,69 @@ export const tourSteps: Step[] = [
     target: '[data-tour="inputs-extraction"]',
     title: 'Messy in, clean out',
     content:
-      'Left: the raw text as received. Right: structured tables extracted by the AI agent. ' +
-      'The visual contrast is the point \u2014 this is where LLMs add real value in low-resource health systems.',
+      'On the left, the report as received. On the right, structured data the system can work with. ' +
+      'This is where AI adds the most value — making sense of inconsistent, incomplete facility reports ' +
+      'that would otherwise take hours to process by hand.',
     placement: 'top',
     disableBeacon: true,
   },
   {
     target: '[data-tour="inputs-metrics"]',
-    title: 'Cross-source reconciliation',
+    title: 'Catching errors before they cause stockouts',
     content:
-      'When stock reports and LMIS records disagree, the agent flags conflicts, applies resolution logic, ' +
-      'and explains its reasoning. Each facility gets a data quality score.',
+      'When a pharmacist\'s report doesn\'t match the logistics system, the AI flags the discrepancy, ' +
+      'explains what it found, and produces a corrected number. Each facility gets a data reliability score.',
     placement: 'bottom',
     disableBeacon: true,
   },
   // ── Demand ──
   {
     target: '[data-tour="demand-title"]',
-    title: 'Disease-driven demand',
+    title: 'Predicting what\'s needed next',
     content:
-      'Rainfall patterns drive malaria and diarrhoeal disease. The forecast engine predicts ' +
-      'how drug demand will shift based on climate data and seasonal patterns.',
+      'Rainfall drives malaria. Flooding drives diarrhoea. The system watches weather patterns and ' +
+      'predicts how drug demand will shift — so facilities can order more antimalarials before ' +
+      'the rainy season, not after they\'ve already run out.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="demand-metrics"]',
-    title: 'Forecast signals',
+    title: 'Forecast confidence',
     content:
-      'Drugs forecasted, average demand change, climate-driven percentage, and model confidence.',
+      'How many drugs were forecasted, how much demand is expected to change, and how confident ' +
+      'the predictions are. Higher confidence means the system has better data to work with.',
     placement: 'bottom',
     disableBeacon: true,
   },
   // ── Procurement ──
   {
     target: '[data-tour="procurement-title"]',
-    title: 'Budget-constrained procurement',
+    title: 'Making the budget stretch',
     content:
-      'The procurement engine takes forecasted demand, applies safety stock calculations, ' +
-      'and allocates the quarterly budget across essential medicines, prioritizing critical drugs.',
+      'Budgets never cover everything. The system takes the demand predictions, applies safety margins, ' +
+      'and figures out the best way to spend the quarterly budget — making sure life-saving drugs ' +
+      'are funded first.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="procurement-metrics"]',
-    title: 'Coverage metrics',
+    title: 'What\'s covered and what\'s not',
     content:
-      'Budget utilization, drug coverage ratios, stockout risks, and critical drug coverage. ' +
-      'The optimizer balances coverage against available budget.',
+      'How much of the budget is allocated, how many drugs are fully covered, ' +
+      'and which ones are still at risk. This is the conversation a district health officer ' +
+      'needs to have with their regional supply chain.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="procurement-tabs"]',
-    title: 'Agent reasoning',
+    title: 'Transparent decision-making',
     content:
-      'The Agent Reasoning tab shows the Claude agent\'s tool calls, redistribution decisions, ' +
-      'and step-by-step logic for how it allocated the budget and made tradeoff decisions.',
+      'The AI Decisions tab shows exactly how the system allocated the budget — ' +
+      'which drugs it prioritized, what tradeoffs it made, and why. ' +
+      'Every recommendation can be reviewed and challenged.',
     placement: 'top',
     disableBeacon: true,
   },
@@ -110,10 +117,10 @@ export const tourSteps: Step[] = [
     target: '[data-tour="hero"]',
     title: 'The hard problems remain',
     content:
-      'The full chain from messy text reports and climate data to an optimized procurement plan, automated by AI agents. ' +
-      'The hard problems that remain are human ones: community health workers reporting stock levels accurately, ' +
-      'facility staff acting on recommendations, and the physical logistics of getting drugs from warehouse to clinic. ' +
-      'That\u2019s where the investment should go.',
+      'This system automates the journey from messy reports to an optimized drug order. ' +
+      'The hard problems that remain are human ones: health workers reporting accurately, ' +
+      'facility staff acting on recommendations, and the physical logistics of getting drugs ' +
+      'from warehouse to clinic. That\u2019s where the investment should go.',
     placement: 'center',
     disableBeacon: true,
   },

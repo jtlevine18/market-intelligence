@@ -63,10 +63,9 @@ export default function Procurement() {
   return (
     <div className="animate-slide-up">
       <div data-tour="procurement-title" className="pt-2 pb-6">
-        <h1 className="page-title">Procurement Plan</h1>
+        <h1 className="page-title">Order Recommendation</h1>
         <p className="page-caption">
-          Budget-constrained procurement optimization for{' '}
-          {plan.planning_months}-month {plan.season} season
+          What to order for the next {plan.planning_months} months of {plan.season} season, within the available budget
         </p>
       </div>
 
@@ -157,13 +156,13 @@ export default function Procurement() {
             className={`tab-item ${activeTab === 'plan' ? 'active' : ''}`}
             onClick={() => setActiveTab('plan')}
           >
-            Procurement Plan
+            Order Details
           </button>
           <button
             className={`tab-item ${activeTab === 'reasoning' ? 'active' : ''}`}
             onClick={() => setActiveTab('reasoning')}
           >
-            Agent Reasoning
+            AI Decisions
           </button>
         </div>
 
@@ -247,7 +246,7 @@ export default function Procurement() {
                     border: '1px solid #c084fc',
                   }}
                 >
-                  Claude Agent
+                  AI-Optimized
                 </span>
               ) : (
                 <span
@@ -258,18 +257,18 @@ export default function Procurement() {
                     border: '1px solid #cbd5e1',
                   }}
                 >
-                  Greedy Fallback
+                  Rule-Based
                 </span>
               )}
               <span className="text-xs text-warm-muted">
-                Optimization method
+                How the budget was allocated
               </span>
             </div>
 
             {/* Tool call trace */}
             {plan.reasoning_trace && plan.reasoning_trace.length > 0 && (
               <div>
-                <div className="section-header">Tool Calls</div>
+                <div className="section-header">Decision Steps</div>
                 <div className="space-y-2">
                   {plan.reasoning_trace.map((step, i) => (
                     <div

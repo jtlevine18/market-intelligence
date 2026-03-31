@@ -99,7 +99,7 @@ export default function Demand() {
       <div data-tour="demand-title" className="pt-2 pb-6">
         <h1 className="page-title">Demand Forecast</h1>
         <p className="page-caption">
-          Climate-driven demand predictions for essential medicines
+          Predicting which medicines will be needed most in the coming months
         </p>
       </div>
 
@@ -107,24 +107,24 @@ export default function Demand() {
         <div className="section-header">Forecast Summary</div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-stagger">
           <MetricCard
-            label="Drugs Forecasted"
+            label="Medicines Forecasted"
             value={forecasts.length}
             subtitle="across all facilities"
           />
           <MetricCard
-            label="Demand Increase"
+            label="Expected Demand Change"
             value={`${avgChange >= 0 ? '+' : ''}${Math.round(avgChange)}%`}
-            subtitle="average change"
+            subtitle="average across medicines"
           />
           <MetricCard
-            label="Climate-Driven"
+            label="Weather-Influenced"
             value={climateDrivenCount}
             subtitle={`of ${forecasts.length} forecasts`}
           />
           <MetricCard
-            label="Avg Confidence"
+            label="Prediction Confidence"
             value={`${Math.round(avgConfidence * 100)}%`}
-            subtitle="model confidence"
+            subtitle="how reliable the forecast is"
           />
         </div>
       </div>
@@ -135,19 +135,19 @@ export default function Demand() {
             className={`tab-item ${activeTab === 'forecast' ? 'active' : ''}`}
             onClick={() => setActiveTab('forecast')}
           >
-            Demand Forecast
+            Forecast
           </button>
           <button
             className={`tab-item ${activeTab === 'climate' ? 'active' : ''}`}
             onClick={() => setActiveTab('climate')}
           >
-            Climate Factors
+            Weather Impact
           </button>
           <button
             className={`tab-item ${activeTab === 'model' ? 'active' : ''}`}
             onClick={() => setActiveTab('model')}
           >
-            ML Model
+            How It Works
           </button>
         </div>
 
@@ -209,7 +209,7 @@ export default function Demand() {
           <div className="animate-tab-enter">
             <div className="card card-body">
               <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] mb-4">
-                Climate Impact by Facility
+                Weather Impact by Facility
               </h3>
               <div style={{ width: '100%', height: 360 }}>
                 <ResponsiveContainer>
@@ -256,124 +256,124 @@ export default function Demand() {
               <ErrorState onRetry={() => modelInfo.refetch()} />
             ) : (
               <>
-                {/* Model badge + metrics */}
-                <div className="flex items-center gap-3 mb-2">
-                  {mm?.model_type === 'epidemiological_formulas' ? (
-                    <span
-                      className="text-xs font-sans font-semibold px-3 py-1 rounded-full"
-                      style={{
-                        backgroundColor: '#e0e7ff',
-                        color: '#3730a3',
-                        border: '1px solid #a5b4fc',
-                      }}
-                    >
-                      Epidemiological Formulas
-                    </span>
-                  ) : (
-                    <span
-                      className="text-xs font-sans font-semibold px-3 py-1 rounded-full"
-                      style={{
-                        backgroundColor: '#dbeafe',
-                        color: '#1e40af',
-                        border: '1px solid #93c5fd',
-                      }}
-                    >
-                      XGBoost
+                {/* Model type badges */}
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  {mm?.model_type?.includes('xgboost') && (
+                    <span className="text-xs font-sans font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd' }}>
+                      AI-Powered Forecast
                     </span>
                   )}
-                  <span className="text-xs text-warm-muted">
-                    Source: {mm?.model_source ?? 'unknown'}
-                  </span>
+                  {mm?.model_type?.includes('residual') && (
+                    <span className="text-xs font-sans font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d' }}>
+                      + Error Correction
+                    </span>
+                  )}
+                  {!mm?.model_type?.includes('xgboost') && (
+                    <span className="text-xs font-sans font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: '#e0e7ff', color: '#3730a3', border: '1px solid #a5b4fc' }}>
+                      Disease-Based Formulas
+                    </span>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <MetricCard
-                    label="RMSE"
-                    value={mm?.rmse?.toFixed(1) ?? '--'}
-                    subtitle="root mean squared error"
-                  />
-                  <MetricCard
-                    label="MAE"
-                    value={mm?.mae?.toFixed(1) ?? '--'}
-                    subtitle="mean absolute error"
-                  />
-                  <MetricCard
-                    label="R-Squared"
-                    value={mm?.r_squared?.toFixed(2) ?? '--'}
-                    subtitle="variance explained"
-                  />
-                  <MetricCard
-                    label="Features"
-                    value={mm?.features?.length ?? 0}
-                    subtitle="input variables"
-                  />
-                </div>
+                {/* Primary model metrics */}
+                {(() => {
+                  const pm = mm?.primary_model
+                  return (
+                    <div>
+                      <div className="section-header">Forecast Accuracy</div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <MetricCard label="Avg Error" value={pm?.rmse?.toFixed(2) ?? mm?.rmse?.toFixed(1) ?? '--'} subtitle="typical prediction error" />
+                        <MetricCard label="Avg Deviation" value={pm?.mae?.toFixed(2) ?? mm?.mae?.toFixed(1) ?? '--'} subtitle="average miss" />
+                        <MetricCard label="Accuracy" value={pm?.r2 ? `${(pm.r2 * 100).toFixed(1)}%` : mm?.r_squared ? `${((mm.r_squared) * 100).toFixed(0)}%` : '--'} subtitle="of demand variation explained" />
+                        <MetricCard label="Factors Used" value={mm?.features?.length ?? pm?.feature_importances ? Object.keys(pm?.feature_importances ?? {}).length : 0} subtitle="data inputs to the model" />
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* Residual correction metrics */}
+                {mm?.residual_model && (mm?.residual_model.rmse_residual_before ?? 0) > 0 && (
+                  <div>
+                    <div className="section-header">Automatic Error Correction</div>
+                    <p className="text-xs text-warm-body mb-3 -mt-1">A second model reviews the first model's predictions and corrects systematic mistakes.</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      <MetricCard
+                        label="Error Before"
+                        value={mm.residual_model.rmse_residual_before?.toFixed(2) ?? '--'}
+                        subtitle="before correction"
+                      />
+                      <MetricCard
+                        label="Error After"
+                        value={mm.residual_model.rmse_residual_after?.toFixed(2) ?? '--'}
+                        subtitle="after correction"
+                      />
+                      <MetricCard
+                        label="Improvement"
+                        value={`${mm.residual_model.rmse_improvement_pct?.toFixed(1) ?? 0}%`}
+                        subtitle="error reduced"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Feature importances bar chart */}
                 {featureImportanceData.length > 0 && (
                   <div className="card card-body">
                     <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] mb-4">
-                      Feature Importances
+                      What Drives the Forecast
                     </h3>
-                    <div style={{ width: '100%', height: 260 }}>
+                    <div style={{ width: '100%', height: Math.max(260, featureImportanceData.length * 24) }}>
                       <ResponsiveContainer>
-                        <BarChart
-                          data={featureImportanceData}
-                          layout="vertical"
-                          margin={{
-                            top: 5,
-                            right: 30,
-                            bottom: 5,
-                            left: 120,
-                          }}
-                        >
-                          <CartesianGrid
-                            strokeDasharray="3 3"
-                            stroke="#e0dcd5"
-                          />
-                          <XAxis
-                            type="number"
-                            tick={{ fontSize: 11, fill: '#888' }}
-                            domain={[0, 100]}
-                            unit="%"
-                          />
-                          <YAxis
-                            type="category"
-                            dataKey="feature"
-                            tick={{ fontSize: 11, fill: '#555' }}
-                            width={110}
-                          />
-                          <Tooltip
-                            contentStyle={{
-                              backgroundColor: '#1a1a1a',
-                              border: 'none',
-                              borderRadius: 8,
-                              color: '#e0dcd5',
-                              fontFamily: '"DM Sans", sans-serif',
-                              fontSize: '0.8rem',
-                            }}
-                            formatter={(value: number) => [`${value}%`, 'Importance']}
-                          />
-                          <Bar
-                            dataKey="importance"
-                            fill="#d4a019"
-                            radius={[0, 4, 4, 0]}
-                          />
+                        <BarChart data={featureImportanceData} layout="vertical" margin={{ top: 5, right: 30, bottom: 5, left: 140 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e0dcd5" />
+                          <XAxis type="number" tick={{ fontSize: 11, fill: '#888' }} domain={[0, 100]} unit="%" />
+                          <YAxis type="category" dataKey="feature" tick={{ fontSize: 10, fill: '#555' }} width={130} />
+                          <Tooltip contentStyle={{ backgroundColor: '#1a1a1a', border: 'none', borderRadius: 8, color: '#e0dcd5', fontFamily: '"DM Sans", sans-serif', fontSize: '0.8rem' }} formatter={(value: number) => [`${value}%`, 'Importance']} />
+                          <Bar dataKey="importance" fill="#d4a019" radius={[0, 4, 4, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 )}
 
-                {/* Model note */}
+                {/* ML Stack overview */}
+                {modelInfo.data?.ml_stack && (
+                  <div className="card card-body">
+                    <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] mb-3">
+                      Technology Behind the Forecast
+                    </h3>
+                    <div className="space-y-2.5">
+                      {Object.entries(modelInfo.data.ml_stack).filter(([k]) => k !== 'agents').map(([key, val]) => (
+                        <div key={key} className="flex items-start gap-3 text-xs">
+                          <span className="font-semibold text-warm-body w-36 shrink-0 capitalize">
+                            {key.replace(/_/g, ' ')}
+                          </span>
+                          <span className="text-warm-muted">
+                            {typeof val === 'object' && val !== null && 'type' in val ? (val as { type: string }).type : String(val)}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="border-t border-warm-border pt-2 mt-2">
+                        <span className="font-semibold text-xs text-warm-body">Claude Agents</span>
+                        <div className="mt-1.5 space-y-1">
+                          {Object.entries(modelInfo.data.ml_stack.agents).map(([name, desc]) => (
+                            <div key={name} className="flex items-start gap-3 text-xs">
+                              <span className="font-medium text-warm-body w-36 shrink-0 capitalize">{name}</span>
+                              <span className="text-warm-muted">{desc}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {mm?.note && (
                   <div className="card card-body">
                     <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] mb-2">
                       Model Description
                     </h3>
-                    <p className="text-sm text-warm-body leading-relaxed m-0">
-                      {mm.note}
-                    </p>
+                    <p className="text-sm text-warm-body leading-relaxed m-0">{mm.note}</p>
                   </div>
                 )}
               </>
