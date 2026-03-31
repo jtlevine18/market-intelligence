@@ -589,12 +589,15 @@ def _generate_demo_data() -> dict:
 
 
 _demo_cache: dict | None = None
+_demo_lock = threading.Lock()
 
 
 def _get_demo() -> dict:
     global _demo_cache
     if _demo_cache is None:
-        _demo_cache = _generate_demo_data()
+        with _demo_lock:
+            if _demo_cache is None:
+                _demo_cache = _generate_demo_data()
     return _demo_cache
 
 
@@ -602,11 +605,19 @@ def _get_demo() -> dict:
 # Helper: get from store or demo
 # ---------------------------------------------------------------------------
 
-def _get(key: str):
+def _get(key: str, default=None):
     """Return store data if pipeline has run, otherwise demo data."""
+    if default is None:
+        default = []
     if store.has_real_data:
-        return getattr(store, key, _get_demo().get(key, []))
-    return _get_demo().get(key, [])
+        val = getattr(store, key, None)
+        if val:
+            return val
+    return _get_demo().get(key, default)
+
+
+def _source() -> str:
+    return "pipeline" if store.has_real_data else "demo"
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +642,7 @@ def get_facilities():
         "facilities": facilities,
         "total": len(facilities),
         "countries": sorted(set(f["country"] for f in facilities)),
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -654,7 +665,7 @@ def get_stock_levels(
     return {
         "stock_levels": levels,
         "total": len(levels),
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -674,19 +685,10 @@ def get_demand_forecast(
     if climate_driven_only:
         forecasts = [f for f in forecasts if f.get("climate_driven")]
 
-    # Ensure new fields are present (backward compat for pipeline data)
-    for fc in forecasts:
-        fc.setdefault("model_source", "epidemiological_formulas")
-        fc.setdefault("prediction_interval", {
-            "lower": round(fc.get("predicted_demand_monthly", 0) * 0.8, 0),
-            "upper": round(fc.get("predicted_demand_monthly", 0) * 1.25, 0),
-        })
-        fc.setdefault("model_metrics", {})
-
     return {
         "forecasts": forecasts,
         "total": len(forecasts),
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -695,26 +697,15 @@ def get_procurement_plan(
     facility_id: str | None = Query(default=None),
 ):
     """Optimized procurement plan with per-drug orders, agent reasoning, and redistributions."""
-    if store.has_real_data:
-        plans = store.procurement_plan
-        if isinstance(plans, dict):
-            plans = [plans]
-    else:
-        plans = _get_demo().get("procurement_plans", [])
+    plans = _get("procurement_plans")
 
     if facility_id:
         plans = [p for p in plans if p.get("facility_id") == facility_id]
 
-    # Ensure new fields are present
-    for p in plans:
-        p.setdefault("optimization_method", "greedy_fallback")
-        p.setdefault("reasoning_trace", [])
-        p.setdefault("redistributions", [])
-
     return {
         "plans": plans,
         "total": len(plans),
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -739,7 +730,7 @@ def get_stockout_risks(
         "total": len(risks),
         "high": high,
         "critical": critical,
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -765,7 +756,7 @@ def get_raw_inputs(
     return {
         "raw_inputs": inputs,
         "total_facilities": len(inputs) if isinstance(inputs, dict) else 0,
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -787,7 +778,7 @@ def get_extracted_data(
     return {
         "extracted_data": data,
         "total_facilities": len(data) if isinstance(data, dict) else 0,
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
@@ -817,21 +808,16 @@ def get_reconciled_data(
         "reconciled_data": data,
         "total_facilities": len(data) if isinstance(data, dict) else 0,
         "total_conflicts": total_conflicts,
-        "source": "pipeline" if store.has_real_data else "demo",
+        "source": _source(),
     }
 
 
 @app.get("/api/model-info")
 def get_model_info():
     """XGBoost / forecasting model metrics and feature importances."""
-    if store.has_real_data and store.model_metrics:
-        metrics = store.model_metrics
-    else:
-        metrics = _get_demo().get("model_metrics", {})
-
     return {
-        "model_metrics": metrics,
-        "source": "pipeline" if store.has_real_data else "demo",
+        "model_metrics": _get("model_metrics", default={}),
+        "source": _source(),
     }
 
 
@@ -842,27 +828,14 @@ def get_model_info():
 @app.get("/api/pipeline/runs")
 def get_pipeline_runs():
     """Run history."""
-    if store.has_real_data and store.pipeline_runs:
-        runs = store.pipeline_runs
-    else:
-        runs = _get_demo().get("pipeline_runs", [])
-
+    runs = _get("pipeline_runs")
     return {"runs": runs, "total": len(runs)}
 
 
 @app.get("/api/pipeline/stats")
 def get_pipeline_stats():
     """Aggregate pipeline stats with per-step token usage."""
-    if store.has_real_data and store.stats:
-        stats = dict(store.stats)
-    else:
-        stats = dict(_get_demo().get("stats", {}))
-
-    # Ensure new token fields are present
-    stats.setdefault("extraction_tokens", 0)
-    stats.setdefault("reconciliation_tokens", 0)
-    stats.setdefault("optimization_tokens", 0)
-
+    stats = _get("stats", default={})
     return stats
 
 

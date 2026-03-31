@@ -23,7 +23,7 @@ class PipelineStore:
         self.facilities: list[dict] = []
         self.stock_levels: list[dict] = []
         self.demand_forecasts: list[dict] = []
-        self.procurement_plan: dict = {}
+        self.procurement_plans: list[dict] = []
         self.stockout_risks: list[dict] = []
         self.alerts: list[dict] = []
         self.pipeline_runs: list[dict] = []
@@ -54,7 +54,10 @@ class PipelineStore:
                 self.facilities = run_result.get("facilities", [])
                 self.stock_levels = run_result.get("stock_levels", [])
                 self.demand_forecasts = run_result.get("demand_forecasts", [])
-                self.procurement_plan = run_result.get("procurement_plan", {})
+                procurement = run_result.get("procurement_plans", run_result.get("procurement_plan", []))
+                if isinstance(procurement, dict):
+                    procurement = [procurement]
+                self.procurement_plans = procurement
                 self.stockout_risks = run_result.get("stockout_risks", [])
                 self.alerts = run_result.get("alerts", [])
 
