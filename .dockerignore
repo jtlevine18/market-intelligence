@@ -1,0 +1,14 @@
+.env
+.git
+__pycache__
+.pytest_cache
+.mypy_cache
+.vscode
+.ruff_cache
+*.pyc
+*.pyo
+frontend/node_modules
+frontend/dist
+models/*.joblib
+.DS_Store
+!README.md

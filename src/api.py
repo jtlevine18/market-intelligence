@@ -57,10 +57,15 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://jtlevine-health-supply-optimizer.hf.space",
+        "https://health-optimizer.vercel.app",
+        "https://health-optimizer-jtlevine18s-projects.vercel.app",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 SEED = 42
@@ -695,7 +700,7 @@ def get_procurement_plan(
         if isinstance(plans, dict):
             plans = [plans]
     else:
-        plans = _demo.get("procurement_plans", [])
+        plans = _get_demo().get("procurement_plans", [])
 
     if facility_id:
         plans = [p for p in plans if p.get("facility_id") == facility_id]
@@ -822,7 +827,7 @@ def get_model_info():
     if store.has_real_data and store.model_metrics:
         metrics = store.model_metrics
     else:
-        metrics = _demo.get("model_metrics", {})
+        metrics = _get_demo().get("model_metrics", {})
 
     return {
         "model_metrics": metrics,
@@ -840,7 +845,7 @@ def get_pipeline_runs():
     if store.has_real_data and store.pipeline_runs:
         runs = store.pipeline_runs
     else:
-        runs = _demo.get("pipeline_runs", [])
+        runs = _get_demo().get("pipeline_runs", [])
 
     return {"runs": runs, "total": len(runs)}
 
@@ -851,7 +856,7 @@ def get_pipeline_stats():
     if store.has_real_data and store.stats:
         stats = dict(store.stats)
     else:
-        stats = dict(_demo.get("stats", {}))
+        stats = dict(_get_demo().get("stats", {}))
 
     # Ensure new token fields are present
     stats.setdefault("extraction_tokens", 0)
