@@ -198,10 +198,11 @@ DRUG_MAP = {d["drug_id"]: d for d in ESSENTIAL_MEDICINES}
 CATEGORIES = sorted(set(d["category"] for d in ESSENTIAL_MEDICINES))
 
 # Lead time assumptions (days from order to delivery)
+# Lagos State Central Medical Store (Oshodi) → facilities
 LEAD_TIMES = {
-    "central_warehouse": 7,
-    "regional_depot": 14,
-    "international": 45,
+    "central_warehouse": 5,   # LSMOH Central Medical Store, Oshodi
+    "regional_depot": 10,     # Zonal medical stores
+    "international": 60,      # UNICEF / Global Fund procurement
 }
 
 # Safety stock multiplier (months of buffer stock to keep)
@@ -246,45 +247,48 @@ class HealthFacility:
 
 FACILITIES: list[HealthFacility] = [
     # ── Lagos State, Nigeria ──
-    HealthFacility("FAC-IKJ", "Ikeja General Hospital", "Ikeja", "Nigeria",
-                   6.6018, 3.3515, "hospital", 180000, 45, 120, True, "good", 12000,
-                   "State referral hospital. Strong reporting. Full cold chain."),
+    # Mix of General Hospitals, PHCs, and Health Centres across urban,
+    # peri-urban, and semi-rural LGAs.  Coordinates, populations, and
+    # budgets calibrated to Lagos State MOH / HEFAMAA data.
+
+    # ── Urban (Lagos Mainland / Island) ──
+    HealthFacility("FAC-IKJ", "General Hospital Ikeja", "Ikeja", "Nigeria",
+                   6.6018, 3.3515, "hospital", 185000, 48, 120, True, "good", 14000,
+                   "State referral hospital on Opebi road. Strong eLMIS reporting. Full cold chain."),
+    HealthFacility("FAC-SUR", "Randle General Hospital", "Surulere", "Nigeria",
+                   6.5000, 3.3500, "hospital", 165000, 40, 100, True, "good", 12000,
+                   "Serves dense mainland corridor. Reliable reporting and cold chain."),
+    HealthFacility("FAC-ISL", "General Hospital Lagos Island", "Lagos Island", "Nigeria",
+                   6.4540, 3.4080, "hospital", 210000, 52, 140, True, "good", 16000,
+                   "Oldest public hospital in Lagos (est. 1893). High patient load. Strong data quality."),
+
+    # ── Urban fringe / High-density ──
     HealthFacility("FAC-AJE", "Ajeromi PHC", "Ajeromi-Ifelodun", "Nigeria",
                    6.4500, 3.3333, "health_center", 95000, 28, 35, False, "poor", 4500,
-                   "Informal settlement. Chronic stockouts. Reports often late or incomplete."),
-    HealthFacility("FAC-EPE", "Epe Health Centre", "Epe", "Nigeria",
-                   6.5833, 3.9833, "health_center", 55000, 18, 40, True, "moderate", 5000,
-                   "Coastal district. Malaria + cholera risk. Moderate reporting."),
+                   "Informal settlement along Lagos Lagoon. Chronic stockouts. Reports often late."),
+    HealthFacility("FAC-MUS", "Mushin General Hospital", "Mushin", "Nigeria",
+                   6.5380, 3.3540, "hospital", 195000, 42, 110, True, "moderate", 11000,
+                   "High-density urban. Frequent ACT stockouts during rainy season peaks."),
+    HealthFacility("FAC-ALI", "Alimosho General Hospital", "Alimosho", "Nigeria",
+                   6.6100, 3.2700, "hospital", 220000, 55, 130, True, "moderate", 13000,
+                   "Largest LGA by population (~2M). High OPD load. Moderate reporting consistency."),
 
-    # ── Kano State, Nigeria ──
-    HealthFacility("FAC-KMC", "Murtala Muhammad Hospital", "Kano Municipal", "Nigeria",
-                   12.0000, 8.5167, "hospital", 250000, 60, 150, True, "good", 15000,
-                   "Major referral hospital. Seasonal malaria surge July-Sept."),
-    HealthFacility("FAC-UNG", "Ungogo Health Post", "Ungogo", "Nigeria",
-                   12.0833, 8.4833, "health_post", 35000, 8, 15, False, "poor", 2000,
-                   "Peri-urban. Limited storage. Reports frequently missing."),
+    # ── Peri-urban / Transitional ──
+    HealthFacility("FAC-IJL", "Ibeju-Lekki PHC", "Ibeju-Lekki", "Nigeria",
+                   6.4500, 3.6333, "health_center", 55000, 15, 30, False, "poor", 3500,
+                   "Rapid urbanisation zone. New settlements outpacing health infrastructure."),
+    HealthFacility("FAC-BAD", "Badagry General Hospital", "Badagry", "Nigeria",
+                   6.4167, 2.8833, "hospital", 75000, 22, 60, True, "moderate", 6000,
+                   "Border town (Nigeria-Benin). Cross-border population dynamics. Malaria endemic."),
 
-    # ── Borno State, Nigeria ──
-    HealthFacility("FAC-MAI", "Umaru Shehu Hospital", "Maiduguri", "Nigeria",
-                   11.8333, 13.1500, "hospital", 200000, 40, 100, True, "moderate", 10000,
-                   "Conflict-affected. IDP camp population. Surveillance gaps."),
-
-    # ── Greater Accra, Ghana ──
-    HealthFacility("FAC-AMA", "Ridge Hospital", "Accra Metropolitan", "Ghana",
-                   5.5600, -0.1900, "hospital", 220000, 55, 130, True, "good", 13000,
-                   "Regional hospital. Strong DHIS2 reporting. Full cold chain."),
-    HealthFacility("FAC-GMA", "Ga South PHC", "Ga South", "Ghana",
-                   5.5333, -0.3000, "health_center", 70000, 20, 30, False, "moderate", 4000,
-                   "Peri-urban. Rapid growth outpacing supply chain capacity."),
-
-    # ── Ashanti Region, Ghana ──
-    HealthFacility("FAC-KMA", "KATH Outpatient", "Kumasi Metropolitan", "Ghana",
-                   6.6884, -1.6244, "hospital", 300000, 65, 180, True, "good", 18000,
-                   "Teaching hospital. Year-round malaria. Excellent data quality."),
-    HealthFacility("FAC-OBU", "Obuasi Health Centre", "Obuasi Municipal", "Ghana",
-                   6.2000, -1.6667, "health_center", 45000, 12, 25, False, "moderate", 3500,
-                   "Mining area. Environmental health issues. Moderate reporting."),
+    # ── Semi-rural / Coastal ──
+    HealthFacility("FAC-EPE", "Epe General Hospital", "Epe", "Nigeria",
+                   6.5833, 3.9833, "hospital", 60000, 18, 50, True, "moderate", 5500,
+                   "Lagoon-side town. Fishing community. Cholera risk in rainy season."),
+    HealthFacility("FAC-IKR", "Ikorodu PHC", "Ikorodu", "Nigeria",
+                   6.6167, 3.5000, "health_center", 85000, 24, 40, False, "moderate", 5000,
+                   "Growing peri-urban centre. Market town serving rural hinterland."),
 ]
 
 FACILITY_MAP: dict[str, HealthFacility] = {f.facility_id: f for f in FACILITIES}
-COUNTRIES = ["Nigeria", "Ghana"]
+COUNTRIES = ["Nigeria"]

@@ -89,7 +89,7 @@ export default function Dashboard() {
       <div data-tour="hero" className="pt-2 pb-6">
         <h1 className="page-title">Health Supply Chain Optimizer</h1>
         <p className="page-caption">
-          Keeping essential medicines in stock at district health facilities across West Africa
+          Keeping essential medicines in stock at health facilities across Lagos State, Nigeria
         </p>
       </div>
 
@@ -245,7 +245,7 @@ export default function Dashboard() {
           <MetricCard
             label="Facilities Reporting"
             value={facilitiesReporting}
-            subtitle="across Nigeria & Ghana"
+            subtitle="across Lagos State"
           />
           <MetricCard
             label="Stockout Warnings"

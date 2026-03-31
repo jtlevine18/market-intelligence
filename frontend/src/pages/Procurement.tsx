@@ -162,7 +162,7 @@ export default function Procurement() {
       <div data-tour="procurement-title" className="pt-2 pb-6">
         <h1 className="page-title">Recommendations</h1>
         <p className="page-caption">
-          AI-generated procurement recommendations for {agg.facilitiesCount} facilities across Nigeria and Ghana
+          AI-generated procurement recommendations for {agg.facilitiesCount} facilities across Lagos State
         </p>
       </div>
 
@@ -184,8 +184,8 @@ export default function Procurement() {
             {/* Map */}
             <div className="rounded-[10px] border border-warm-border overflow-hidden" style={{ height: 420 }}>
               <MapContainer
-                center={[8.5, 4]}
-                zoom={5}
+                center={[6.52, 3.45]}
+                zoom={10}
                 style={{ height: '100%', width: '100%' }}
                 scrollWheelZoom={false}
                 attributionControl={false}
@@ -303,7 +303,7 @@ export default function Procurement() {
               <MetricCard
                 label="Facilities"
                 value={agg.facilitiesCount}
-                subtitle="across Nigeria & Ghana"
+                subtitle="across Lagos State"
               />
               <MetricCard
                 label="Critical Coverage"

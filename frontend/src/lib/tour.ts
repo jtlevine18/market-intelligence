@@ -6,9 +6,9 @@ export const tourSteps: Step[] = [
     target: '[data-tour="hero"]',
     title: 'Welcome',
     content:
-      'This tool helps district health officers in West Africa keep essential medicines in stock. ' +
+      'This tool helps district health officers keep essential medicines in stock. ' +
       'It reads messy facility reports, predicts which drugs will run out, and recommends what to order — ' +
-      'across 10 real facilities in Nigeria and Ghana.',
+      'across 10 real health facilities in Lagos State, Nigeria.',
     placement: 'bottom',
     disableBeacon: true,
   },
