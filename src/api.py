@@ -29,7 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from config import (
     ESSENTIAL_MEDICINES,
@@ -928,6 +928,119 @@ def run_optimization(
         prioritize_critical=prioritize_critical,
     )
     return plan_to_dict(plan)
+
+
+# -- Status page (HF Space landing) ------------------------------------------
+
+@app.get("/", response_class=HTMLResponse)
+def status_page():
+    """Status dashboard shown when visiting the HF Space directly."""
+    stats = _get("stats", default={})
+    risks = _get("stockout_risks")
+    facilities = _get("facilities")
+
+    n_facilities = stats.get("facilities_monitored", len(facilities))
+    n_drugs = stats.get("drugs_tracked", len(ESSENTIAL_MEDICINES))
+    success_rate = stats.get("success_rate", 0)
+    high_risk = stats.get("high_risk_stockouts", 0)
+
+    # Build stockout risk rows (top 5)
+    high_risks = [r for r in risks if r.get("stockout_risk", r.get("risk_level")) in ("high", "critical")]
+    risk_rows = ""
+    for r in high_risks[:6]:
+        level = r.get("stockout_risk", r.get("risk_level", ""))
+        badge_cls = "critical" if level == "critical" else "warning" if level == "high" else "watch"
+        days = r.get("days_of_stock", "?")
+        risk_rows += f"""
+        <tr>
+            <td>{r.get('facility_name', r.get('facility_id', ''))}</td>
+            <td>{r.get('drug_name', r.get('drug_id', ''))}</td>
+            <td><span class="badge {badge_cls}">{level.upper()}</span></td>
+            <td>{days} days</td>
+        </tr>"""
+
+    if not risk_rows:
+        risk_rows = '<tr><td colspan="4" style="color:#888;text-align:center;padding:16px;">No active stockout risks</td></tr>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Health Supply Chain Optimizer — API Status</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #faf8f5; color: #1a1a1a; padding: 32px; max-width: 720px; margin: 0 auto; }}
+  h1 {{ font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }}
+  .subtitle {{ color: #888; font-size: 0.85rem; margin-bottom: 24px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }}
+  .card {{ background: #fff; border: 1px solid #e0dcd5; border-radius: 8px; padding: 14px; }}
+  .card .label {{ font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px; }}
+  .card .value {{ font-size: 1.3rem; font-weight: 700; }}
+  .status {{ display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; background: #2a9d8f22; color: #2a9d8f; }}
+  .section {{ font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #2a9d8f; border-bottom: 2px solid #2a9d8f; padding-bottom: 6px; margin: 20px 0 12px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
+  th {{ text-align: left; font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #e0dcd5; }}
+  td {{ padding: 8px; border-bottom: 1px solid #f0ede8; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }}
+  .badge.critical {{ background: #e6394622; color: #e63946; }}
+  .badge.warning {{ background: #e67e2222; color: #e67e22; }}
+  .badge.watch {{ background: #d4a01922; color: #d4a019; }}
+  .link {{ color: #2a9d8f; text-decoration: none; font-weight: 600; }}
+  .link:hover {{ text-decoration: underline; }}
+  .footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #e0dcd5; font-size: 0.75rem; color: #aaa; }}
+</style>
+</head>
+<body>
+  <h1>Health Supply Chain Optimizer <span class="status">Running</span></h1>
+  <p class="subtitle">API backend for the Health Supply Chain Monitor — <a class="link" href="https://health-supply-optimizer.vercel.app" target="_blank">Open Frontend</a></p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Facilities</div>
+      <div class="value">{n_facilities}</div>
+    </div>
+    <div class="card">
+      <div class="label">Medicines Tracked</div>
+      <div class="value">{n_drugs}</div>
+    </div>
+    <div class="card">
+      <div class="label">Stockout Risks</div>
+      <div class="value" style="color: {'#e63946' if high_risk > 0 else '#1a1a1a'};">{high_risk}</div>
+    </div>
+    <div class="card">
+      <div class="label">Data Reliability</div>
+      <div class="value">{round(success_rate * 100)}%</div>
+    </div>
+  </div>
+
+  <div class="section">Stockout Risks</div>
+  <table><thead><tr><th>Facility</th><th>Medicine</th><th>Level</th><th>Stock Left</th></tr></thead><tbody>{risk_rows}</tbody></table>
+
+  <div class="section">API Endpoints</div>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>/health</code></td><td>Service health check</td></tr>
+      <tr><td><code>/api/facilities</code></td><td>All {n_facilities} facilities with stock status</td></tr>
+      <tr><td><code>/api/stock-levels</code></td><td>Stock levels by drug x facility</td></tr>
+      <tr><td><code>/api/demand-forecast</code></td><td>Predicted demand with climate factors</td></tr>
+      <tr><td><code>/api/procurement-plan</code></td><td>Optimized procurement plan with agent reasoning</td></tr>
+      <tr><td><code>/api/stockout-risks</code></td><td>Medicines at risk of running out</td></tr>
+      <tr><td><code>/api/raw-inputs</code></td><td>Raw facility stock reports (unstructured text)</td></tr>
+      <tr><td><code>/api/extracted-data</code></td><td>AI-extracted structured data from reports</td></tr>
+      <tr><td><code>/api/reconciled-data</code></td><td>Reconciled data with conflict resolution</td></tr>
+      <tr><td><code>/api/model-info</code></td><td>XGBoost model metrics and feature importances</td></tr>
+      <tr><td><code>/api/pipeline/runs</code></td><td>Pipeline run history</td></tr>
+      <tr><td><code>/api/pipeline/stats</code></td><td>Aggregate statistics</td></tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    Vercel frontend: <a class="link" href="https://health-supply-optimizer.vercel.app">health-supply-optimizer.vercel.app</a>
+  </div>
+</body>
+</html>"""
 
 
 # -- Static file serving -----------------------------------------------------
