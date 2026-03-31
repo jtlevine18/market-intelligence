@@ -59,8 +59,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://jtlevine-health-supply-optimizer.hf.space",
-        "https://health-optimizer.vercel.app",
-        "https://health-optimizer-jtlevine18s-projects.vercel.app",
+        "https://health-supply-optimizer.vercel.app",
+        "https://frontend-five-ruby-79.vercel.app",
         "http://localhost:5173",
     ],
     allow_credentials=True,
