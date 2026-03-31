@@ -105,6 +105,15 @@ export interface MLStackInfo {
     purpose: string
     metrics: ResidualMetrics
   }
+  chronos_bolt?: {
+    name: string
+    model_id: string
+    parameters: string
+    pretraining_data: string
+    type: string
+    inference: string
+    status: string
+  }
   anomaly_detection: {
     type: string
     purpose: string
@@ -121,6 +130,7 @@ export interface ModelInfoResponse {
     model_type: string
     primary_model?: MLModelMetrics
     residual_model?: ResidualMetrics
+    chronos_model?: Record<string, string>
     features?: string[]
     feature_importances?: Record<string, number>
     // Legacy fields for epidemiological mode

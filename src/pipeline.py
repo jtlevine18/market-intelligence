@@ -30,6 +30,11 @@ from src.ingestion.lmis_simulator import simulate_all_facilities, StockReading, 
 from src.forecasting.demand import forecast_demand, forecast_to_dicts, DemandForecast
 from src.forecasting.model import XGBoostDemandModel, FACILITY_TYPE_ENC, CATEGORY_ENC
 from src.forecasting.residual_model import ResidualCorrectionModel
+from src.forecasting.chronos_model import (
+    ChronosBoltForecaster,
+    build_series_from_training_data,
+    ensemble_predictions,
+)
 from src.anomaly.detector import ConsumptionAnomalyDetector
 from src.optimizer import optimize, plan_to_dict, ProcurementPlan
 from src.procurement_agent import ProcurementAgent, ProcurementRecommendation
@@ -710,10 +715,22 @@ class HealthSupplyChainPipeline:
                 xgb_model.save()
                 model_type = "xgboost"
 
+            # Layer 2.5: Chronos-Bolt neural foundation model (zero-shot)
+            chronos = ChronosBoltForecaster()
+            chronos_preds: dict = {}
+            if chronos.is_available:
+                if training_df is None:
+                    training_df = xgb_model.build_training_data(months_back=6, seed=42)
+                series = build_series_from_training_data(training_df)
+                chronos_preds = chronos.predict_batch(series, prediction_length=1)
+                if chronos_preds:
+                    model_type += "+chronos_bolt"
+                    logger.info("Chronos-Bolt predictions: %d series", len(chronos_preds))
+
             # Layer 3: Residual correction (MOS pattern)
             try:
                 residual_model.load()
-                model_type = "xgboost+residual_correction"
+                model_type = model_type.replace("xgboost", "xgboost+residual_correction", 1)
                 logger.info("Loaded pre-trained residual correction model")
             except FileNotFoundError:
                 if xgb_model.is_trained():
@@ -723,15 +740,38 @@ class HealthSupplyChainPipeline:
                         res_df = residual_model.build_residual_data(xgb_model, training_df)
                         residual_model.train(res_df)
                         residual_model.save()
-                        model_type = "xgboost+residual_correction"
+                        model_type = model_type.replace("xgboost", "xgboost+residual_correction", 1)
                     except Exception:
                         logger.warning("Residual model training failed — continuing with primary only")
+
+            # Ensemble Chronos predictions into forecast dicts
+            if chronos_preds and xgb_model.is_trained():
+                for fc in self._forecast_dicts:
+                    key = f"{fc['facility_id']}|{fc['drug_id']}"
+                    cp = chronos_preds.get(key)
+                    if not cp:
+                        continue
+                    # Get XGBoost prediction for this item
+                    xgb_pred = fc.get("predicted_demand_monthly", fc.get("baseline_demand_monthly", 0))
+                    pi = fc.get("prediction_interval", {})
+                    xgb_lower = pi.get("lower", xgb_pred * 0.8)
+                    xgb_upper = pi.get("upper", xgb_pred * 1.2)
+                    ens = ensemble_predictions(
+                        xgb_pred, xgb_lower, xgb_upper,
+                        cp["median"], cp["lower_10"], cp["upper_90"],
+                    )
+                    fc["ensemble"] = ens
+                    fc["prediction_interval"] = {
+                        "lower": ens["ensemble_lower"],
+                        "upper": ens["ensemble_upper"],
+                    }
 
             # Model metrics from trained models
             self._model_metrics = {
                 "model_type": model_type,
                 "primary_model": xgb_model.metrics if xgb_model.is_trained() else {},
                 "residual_model": residual_model.metrics if residual_model.is_trained() else {},
+                "chronos_model": chronos.model_info,
                 "features": list(xgb_model.feature_importances.keys()) if xgb_model.is_trained() else [],
                 "feature_importances": xgb_model.feature_importances if xgb_model.is_trained() else {},
             }

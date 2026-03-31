@@ -504,6 +504,18 @@ export default function Demand() {
                       + Error Correction
                     </span>
                   )}
+                  {mm?.model_type?.includes('chronos') && (
+                    <span
+                      className="text-xs font-sans font-semibold px-3 py-1 rounded-full"
+                      style={{
+                        backgroundColor: '#d1fae5',
+                        color: '#065f46',
+                        border: '1px solid #6ee7b7',
+                      }}
+                    >
+                      + Neural Foundation Model
+                    </span>
+                  )}
                   {!mm?.model_type?.includes('xgboost') && (
                     <span
                       className="text-xs font-sans font-semibold px-3 py-1 rounded-full"
@@ -517,6 +529,70 @@ export default function Demand() {
                     </span>
                   )}
                 </div>
+
+                {/* Chronos-Bolt hero card */}
+                {modelInfo.data?.ml_stack?.chronos_bolt && (
+                  <div
+                    className="card card-accent accent-green"
+                    style={{ padding: '20px 24px' }}
+                  >
+                    <div className="flex items-start gap-4">
+                      <div
+                        className="w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ background: '#d1fae5' }}
+                      >
+                        <span style={{ fontSize: '1.3rem' }}>🧠</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] m-0 mb-1">
+                          Amazon Chronos-Bolt
+                          <span
+                            className="ml-2 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                            style={{
+                              backgroundColor: '#d1fae5',
+                              color: '#065f46',
+                              border: '1px solid #6ee7b7',
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            ZERO-SHOT
+                          </span>
+                        </h3>
+                        <p className="text-xs text-warm-body leading-relaxed m-0 mb-3">
+                          A 9M-parameter transformer pre-trained on 100 billion+ time series observations.
+                          Works for new locations from day one — no historical data or ML expertise needed.
+                          This is what makes AI-powered forecasting accessible to any health district, anywhere.
+                        </p>
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-warm-muted font-semibold">
+                              Parameters
+                            </div>
+                            <div className="text-sm font-serif font-bold text-[#1a1a1a]">
+                              9M
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-warm-muted font-semibold">
+                              Pre-trained On
+                            </div>
+                            <div className="text-sm font-serif font-bold text-[#1a1a1a]">
+                              100B+ obs
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-warm-muted font-semibold">
+                              Ensemble Weight
+                            </div>
+                            <div className="text-sm font-serif font-bold text-[#1a1a1a]">
+                              35%
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Primary model metrics */}
                 {(() => {
