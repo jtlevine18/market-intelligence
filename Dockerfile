@@ -2,10 +2,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 ca-certificates curl git \
+    libgomp1 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch CPU-only first (separate layer for caching)
+# Install PyTorch CPU-only (needed for sentence-transformers)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt .

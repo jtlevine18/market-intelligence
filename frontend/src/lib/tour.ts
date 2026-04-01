@@ -1,125 +1,116 @@
 import type { Step } from 'react-joyride'
 
 export const tourSteps: Step[] = [
-  // ── Dashboard ──
+  // ── Market Prices (/) ──
   {
     target: '[data-tour="hero"]',
-    title: 'Welcome',
+    title: 'Meet your market broker',
     content:
-      'This tool helps district health officers keep essential medicines in stock. ' +
-      'It reads messy facility reports, predicts which drugs will run out, and recommends what to order — ' +
-      'across 10 real health facilities in Lagos State, Nigeria.',
+      'Lakshmi harvests rice in Thanjavur. She has three mandis within 40km, each reporting different prices. ' +
+      'This AI agent scrapes both government price databases, reconciles the discrepancies, and tells her exactly ' +
+      'where and when to sell \u2014 down to the rupee.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="stage-cards"]',
-    title: 'From raw reports to an order plan',
+    title: 'Three stages, one decision',
     content:
-      'Data moves through three stages: cleaning and verifying facility reports, ' +
-      'predicting future drug demand based on disease patterns, and building an optimized order ' +
-      'that fits the quarterly budget.',
+      'First: scrape prices from Agmarknet (data.gov.in API) and eNAM for 15 Tamil Nadu mandis. ' +
+      'Second: when they disagree \u2014 and they do, 5\u201312% of the time \u2014 investigate and reconcile. ' +
+      'Third: compute the best (mandi, timing) combination after transport costs and storage losses.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
     target: '[data-tour="metrics"]',
-    title: 'Key numbers at a glance',
+    title: 'Live numbers',
     content:
-      'How many facilities are reporting, which drugs are at risk of running out, ' +
-      'and how reliably the system is running. These update automatically after each run.',
+      '15 mandis, 10 commodities (rice, groundnut, turmeric, cotton, onion...), and every price conflict ' +
+      'resolved automatically. These update after each pipeline run.',
     placement: 'top',
     disableBeacon: true,
   },
-  // ── Inputs ──
+  // ── Inputs (/inputs) ──
   {
     target: '[data-tour="inputs-title"]',
-    title: 'Turning paperwork into data',
+    title: 'The problem nobody solves',
     content:
-      'Facility pharmacists send stock counts as unstructured text — sometimes handwritten, ' +
-      'sometimes a WhatsApp message. AI reads these reports and pulls out the numbers that matter: ' +
-      'how much of each drug is left, and how fast it\'s being used.',
+      'Agmarknet says \u20b92,100 for rice at Thanjavur. eNAM says \u20b92,250. Same market, same day. ' +
+      'No existing tool reconciles these \u2014 farmers and traders just guess. ' +
+      'This agent investigates using 5 different checks.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
-    target: '[data-tour="inputs-extraction"]',
-    title: 'Messy in, clean out',
+    target: '[data-tour="inputs-reconciled"]',
+    title: 'Investigation, not averaging',
     content:
-      'On the left, the report as received. On the right, structured data the system can work with. ' +
-      'This is where AI adds the most value — making sense of inconsistent, incomplete facility reports ' +
-      'that would otherwise take hours to process by hand.',
+      'The agent checks neighboring mandis, seasonal norms, arrival volumes, and transport arbitrage. ' +
+      'If Thanjavur says \u20b92,100 but every neighbor says \u20b92,200+, Thanjavur\u2019s data is probably stale. ' +
+      'Each resolution shows the full reasoning chain.',
     placement: 'top',
     disableBeacon: true,
   },
   {
     target: '[data-tour="inputs-metrics"]',
-    title: 'Catching errors before they cause stockouts',
+    title: 'Trust, quantified',
     content:
-      'When a pharmacist\'s report doesn\'t match the logistics system, the AI flags the discrepancy, ' +
-      'explains what it found, and produces a corrected number. Each facility gets a data reliability score.',
+      'Every reconciled price gets a confidence score. Poor-reporting mandis score lower. ' +
+      'The system is transparent about what it knows and what it\u2019s guessing.',
     placement: 'bottom',
     disableBeacon: true,
   },
-  // ── Demand ──
+  // ── Forecast (/forecast) ──
   {
-    target: '[data-tour="demand-title"]',
-    title: 'Predicting what\'s needed next',
+    target: '[data-tour="forecast-title"]',
+    title: 'Should she sell now or wait?',
     content:
-      'Rainfall drives malaria. Flooding drives diarrhoea. The system watches weather patterns and ' +
-      'predicts how drug demand will shift — so facilities can order more antimalarials before ' +
-      'the rainy season, not after they\'ve already run out.',
-    placement: 'bottom',
-    disableBeacon: true,
-  },
-  {
-    target: '[data-tour="demand-metrics"]',
-    title: 'Forecast confidence',
-    content:
-      'How many drugs were forecasted, how much demand is expected to change, and how confident ' +
-      'the predictions are. Higher confidence means the system has better data to work with.',
-    placement: 'bottom',
-    disableBeacon: true,
-  },
-  // ── Procurement ──
-  {
-    target: '[data-tour="procurement-title"]',
-    title: 'From forecast to action',
-    content:
-      'The map shows all 10 facilities — green means covered, red means medicines are running out. ' +
-      'Dashed lines show where the AI recommends moving surplus stock between facilities ' +
-      'instead of ordering more.',
+      'Rice prices typically drop 15% in October (post-harvest glut) and climb through May. ' +
+      'The model uses 15 features \u2014 seasonal patterns, rainfall, mandi arrivals \u2014 to predict ' +
+      'prices at 7, 14, and 30 days. That turns "sell now or wait" from a guess into a calculation.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
-    target: '[data-tour="procurement-metrics"]',
-    title: 'What\'s covered and what\'s not',
+    target: '[data-tour="forecast-metrics"]',
+    title: 'Confidence matters',
     content:
-      'Critical drug coverage, stockout risks, and budget allocation at a glance. ' +
-      'Click any facility on the map to see its specific recommendations.',
+      'Forecasts come with confidence intervals. A prediction of \u20b92,300 \u00b1 \u20b9150 means something different ' +
+      'than \u20b92,300 \u00b1 \u20b9500. The system shows both so the farmer can weigh the risk.',
+    placement: 'bottom',
+    disableBeacon: true,
+  },
+  // ── Sell Advisor (/sell) ──
+  {
+    target: '[data-tour="sell-title"]',
+    title: 'The full calculation',
+    content:
+      'Lakshmi (rice, Thanjavur), Kumar (turmeric, Erode), Meena (banana, Dindigul). For each farmer, ' +
+      'the agent evaluates every nearby mandi at every time horizon: market price minus transport, ' +
+      'minus storage loss, minus mandi fees = net price. Then recommends the best option.',
     placement: 'bottom',
     disableBeacon: true,
   },
   {
-    target: '[data-tour="procurement-tabs"]',
-    title: 'Four ways to look at the same plan',
+    target: '[data-tour="sell-metrics"]',
+    title: 'Real tradeoffs, real numbers',
     content:
-      'Overview shows the map. Action Plan lists what each facility should do. ' +
-      'Impact shows what happens if recommendations are followed. ' +
-      'Evidence shows exactly how the AI made its decisions.',
-    placement: 'top',
+      'Kumbakonam might offer \u20b9150 more per quintal than Thanjavur, but it\u2019s 30km away. ' +
+      'Transport costs \u20b980. Net gain: \u20b970. Worth the trip? That\u2019s what the options table shows \u2014 ' +
+      'every cost component, transparent.',
+    placement: 'bottom',
     disableBeacon: true,
   },
-  // ── Final ──
+  // ── Final (/) ──
   {
     target: '[data-tour="hero"]',
-    title: 'The hard problems remain',
+    title: 'The hard problem remains',
     content:
-      'This system automates the journey from messy reports to an optimized drug order. ' +
-      'The hard problems that remain are human ones: health workers reporting accurately, ' +
-      'facility staff acting on recommendations, and the physical logistics of getting drugs ' +
-      'from warehouse to clinic. That\u2019s where the investment should go.',
+      'This system automates the journey from messy government data to a personalized sell recommendation. ' +
+      'The hard problems that remain are human: getting smartphones into farmers\u2019 hands, ' +
+      'building trust in data-driven advice, and connecting this to the platforms farmers already use. ' +
+      'That\u2019s where the investment should go.',
     placement: 'center',
     disableBeacon: true,
   },
@@ -132,12 +123,11 @@ export const stepRoutes: Record<number, string> = {
   3: '/inputs',
   4: '/inputs',
   5: '/inputs',
-  6: '/demand',
-  7: '/demand',
-  8: '/procurement',
-  9: '/procurement',
-  10: '/procurement',
-  11: '/',
+  6: '/forecast',
+  7: '/forecast',
+  8: '/sell',
+  9: '/sell',
+  10: '/',
 }
 
 export const tourStyles = {

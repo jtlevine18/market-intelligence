@@ -1,7 +1,7 @@
 ---
-title: Health Supply Chain Optimizer
-emoji: 💊
-colorFrom: blue
+title: Market Intelligence Agent
+emoji: 🌾
+colorFrom: yellow
 colorTo: green
 sdk: docker
 app_port: 7860

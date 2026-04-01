@@ -3,67 +3,64 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import MetricCard from '../components/MetricCard'
 import StatusBadge from '../components/StatusBadge'
 import { LoadingSpinner, ErrorState } from '../components/LoadingState'
-import { usePipelineStats, usePipelineRuns } from '../lib/api'
+import { usePipelineStats, usePipelineRuns, useModelInfo } from '../lib/api'
 
-// ── Architecture Diagram Data ─────────────────────────────────────────────
+// ── Pipeline Architecture ────────────────────────────────────────────────────
 
 const PIPELINE_STEPS = [
   {
-    num: 1, name: 'Collect', table: 'raw_inputs', color: '#2E7D32',
-    desc: 'Gathers stock reports from pharmacists, disease surveillance data, community health worker messages, satellite weather data, and facility budgets',
+    num: 1, name: 'Ingest', table: 'raw_inputs', color: '#2E7D32',
+    desc: 'Scrapes daily price reports from Agmarknet and eNAM government databases for all 15 monitored mandis across Tamil Nadu',
     options: [
-      { label: 'Pharmacist Reports', note: 'Monthly stock counts, often unstructured text', active: true },
-      { label: 'Disease Surveillance', note: 'Weekly case counts from WHO-standard IDSR system', active: true },
-      { label: 'Health Worker Messages', note: 'Informal reports from the field', active: true },
-      { label: 'Satellite Weather', note: 'Temperature, rainfall, humidity from NASA', active: true },
-      { label: 'Facility Budgets', note: 'Quarterly budget allocations', active: true },
+      { label: 'Agmarknet Scraper', note: 'Government agricultural market prices, updated daily', active: true },
+      { label: 'eNAM Scraper', note: 'Electronic National Agriculture Market, online trading platform', active: true },
+      { label: 'Mandi Metadata', note: 'Market coordinates, trading hours, commodity lists', active: true },
     ],
   },
   {
-    num: 2, name: 'Read & Structure', table: 'extracted_data', color: '#7B1FA2',
-    desc: 'AI reads unstructured text reports and pulls out structured data: drug stock levels, disease case counts, and urgent alerts',
+    num: 2, name: 'Extract', table: 'extracted_data', color: '#7B1FA2',
+    desc: 'Parses raw HTML and PDF reports into structured price records: commodity, quantity, min/max/modal prices per mandi',
     options: [
-      { label: 'AI-Powered', note: 'Reads messy text and extracts the numbers that matter', active: true },
-      { label: 'Pattern Matching', note: 'Simpler backup for well-formatted reports', active: false },
+      { label: 'AI-Powered', note: 'Handles inconsistent formats, missing fields, Hindi/Tamil text', active: true },
+      { label: 'Regex Fallback', note: 'Pattern matching for standard Agmarknet tabular format', active: false },
     ],
   },
   {
-    num: 3, name: 'Verify', table: 'reconciled_data', color: '#1565C0',
-    desc: 'Compares stock reports against the logistics system and health worker observations — flags discrepancies and explains what it found',
+    num: 3, name: 'Reconcile', table: 'reconciled_data', color: '#1565C0',
+    desc: 'When Agmarknet and eNAM report different prices for the same mandi on the same day, the AI investigates and produces a single reconciled price with reasoning',
     options: [
-      { label: 'AI-Powered', note: 'Detects inconsistencies and explains how it resolved them', active: true },
-      { label: 'Simple Rules', note: 'Basic averaging when AI is unavailable', active: false },
+      { label: 'AI Reconciliation', note: 'Compares sources, checks historical patterns, explains decisions', active: true },
+      { label: 'Weighted Average', note: 'Fallback: weight by source reliability score', active: false },
     ],
   },
   {
-    num: 4, name: 'Predict Demand', table: 'demand_forecasts', color: '#E65100',
-    desc: 'Predicts future drug demand using disease patterns, weather data, and past consumption — then a second model checks and corrects the first',
+    num: 4, name: 'Forecast', table: 'price_forecasts', color: '#E65100',
+    desc: 'Predicts price movements for 7, 14, and 30 days using 15 features: seasonality, weather, arrival volumes, transport costs, and historical patterns',
     options: [
-      { label: 'Disease Patterns', note: 'Malaria peaks with rainfall, diarrhoea with flooding', active: true },
-      { label: 'AI Demand Model', note: 'Learns from 20 factors including consumption history and facility characteristics', active: true },
-      { label: 'Error Correction', note: 'A second model fixes systematic mistakes in the first', active: true },
-      { label: 'Unusual Pattern Detection', note: 'Flags readings that look wrong — possible data errors or stock theft', active: true },
+      { label: 'XGBoost Model', note: 'Gradient-boosted trees trained on 3 years of Tamil Nadu price data', active: true },
+      { label: 'Seasonal Patterns', note: 'Harvest cycles, festival demand, monsoon effects', active: true },
+      { label: 'Confidence Intervals', note: 'Probabilistic bounds on price predictions', active: true },
     ],
   },
   {
-    num: 5, name: 'Build the Order', table: 'procurement_plans', color: '#C62828',
-    desc: 'AI allocates the quarterly budget across medicines and facilities, prioritizing life-saving drugs and moving surplus stock between facilities',
+    num: 5, name: 'Optimize', table: 'sell_options', color: '#C62828',
+    desc: 'For each farmer, computes all (mandi, timing) combinations, accounting for transport costs, storage losses, mandi fees, and distance',
     options: [
-      { label: 'AI-Optimized', note: 'Considers tradeoffs across all facilities simultaneously', active: true },
-      { label: 'Priority Rules', note: 'Critical drugs first, then by impact per dollar', active: true },
+      { label: 'Route Optimization', note: 'Google Maps API for distance and drive time estimates', active: true },
+      { label: 'Cost Model', note: 'Transport, storage decay, commission fees per mandi', active: true },
     ],
   },
   {
     num: 6, name: 'Recommend', table: 'recommendations', color: '#d4a019',
-    desc: 'Generates personalized recommendations grounded in WHO and MSH clinical guidelines, drawing on a library of 101 health supply chain knowledge articles',
+    desc: 'Generates personalized sell advice for each farmer in English and Tamil, explaining which mandi, when to sell, and why \u2014 backed by a full cost breakdown',
     options: [
-      { label: 'AI + Clinical Knowledge', note: 'Recommendations grounded in WHO Essential Medicines and MSH procurement guidelines', active: true },
-      { label: 'Standard Template', note: 'Generic recommendations when AI is unavailable', active: false },
+      { label: 'AI-Generated Advice', note: 'Natural language recommendations with reasoning', active: true },
+      { label: 'Tamil Translation', note: 'Bilingual output for farmer accessibility', active: true },
     ],
   },
 ]
 
-// ── Architecture Diagram Component ────────────────────────────────────────
+// ── Architecture Diagram Component ───────────────────────────────────────────
 
 function ArchitectureDiagram() {
   return (
@@ -116,18 +113,18 @@ function ArchitectureDiagram() {
   )
 }
 
-// ── Cost Breakdown Component ──────────────────────────────────────────────
+// ── Cost Breakdown Component ─────────────────────────────────────────────────
 
 function CostBreakdown() {
   const costs = [
-    { component: 'Weather data (NASA)', cost: 0, note: 'Free satellite data' },
-    { component: 'AI: Reading reports', cost: 0.06, note: 'Parsing 10 facility stock reports' },
-    { component: 'AI: Verifying data', cost: 0.04, note: 'Cross-checking multiple data sources' },
-    { component: 'AI: Building the order', cost: 0.08, note: 'Optimizing across all facilities' },
-    { component: 'AI: Recommendations', cost: 0.05, note: 'Grounded in WHO clinical guidelines' },
+    { component: 'Agmarknet scraping', cost: 0, note: 'Free government data' },
+    { component: 'eNAM scraping', cost: 0, note: 'Free government data' },
+    { component: 'AI: Data extraction', cost: 0.04, note: 'Parsing 15 mandi reports' },
+    { component: 'AI: Price reconciliation', cost: 0.06, note: 'Resolving conflicts across sources' },
+    { component: 'AI: Sell recommendations', cost: 0.05, note: 'Generating personalized advice' },
+    { component: 'XGBoost forecasting', cost: 0, note: 'Local model inference' },
+    { component: 'Google Maps API', cost: 0.02, note: 'Distance and route calculations' },
     { component: 'Backend server', cost: 0, note: 'Cloud hosting (free tier)' },
-    { component: 'Dashboard', cost: 0, note: 'Cloud hosting (free tier)' },
-    { component: 'Database', cost: 0, note: 'Cloud database (free tier)' },
   ]
   const total = costs.reduce((s, c) => s + c.cost, 0)
 
@@ -158,7 +155,7 @@ function CostBreakdown() {
           <tr className="border-t-2 border-warm-border bg-warm-header-bg">
             <td className="px-4 py-2 font-bold text-[#1a1a1a]">Total per pipeline run</td>
             <td className="px-4 py-2 text-right font-mono font-bold text-[#1a1a1a]">${total.toFixed(2)}</td>
-            <td className="px-4 py-2 text-warm-muted text-xs font-semibold">~$7/month at daily runs</td>
+            <td className="px-4 py-2 text-warm-muted text-xs font-semibold">~$5/month at daily runs</td>
           </tr>
         </tbody>
       </table>
@@ -166,53 +163,32 @@ function CostBreakdown() {
   )
 }
 
-// ── Degradation Chain Component ───────────────────────────────────────────
-
-function DegradationChain() {
-  const tiers = [
-    {
-      tier: 'Best', name: 'Full AI Processing', color: '#2a9d8f',
-      desc: 'AI reads reports, verifies data, predicts demand, detects problems, and builds recommendations grounded in clinical guidelines. Costs about $0.23 per update.',
-    },
-    {
-      tier: 'Good', name: 'Automated Rules', color: '#d4a019',
-      desc: 'If AI services are temporarily unavailable, the system falls back to pattern matching for reports and priority-based ordering. No AI cost.',
-    },
-    {
-      tier: 'Basic', name: 'Historical Averages', color: '#e63946',
-      desc: 'Last resort: uses last year\'s seasonal averages to estimate demand. Better than nothing, but misses real-time changes.',
-    },
-  ]
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {tiers.map((t) => (
-        <div
-          key={t.tier}
-          className="bg-white border border-warm-border rounded-lg p-4"
-          style={{ borderLeft: `4px solid ${t.color}` }}
-        >
-          <p className="text-[0.7rem] text-warm-muted uppercase tracking-widest font-semibold m-0">{t.tier}</p>
-          <p className="text-sm font-bold text-[#1a1a1a] mt-1 mb-2 m-0">{t.name}</p>
-          <p className="text-xs text-warm-body leading-relaxed m-0">{t.desc}</p>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── Main Pipeline Page ────────────────────────────────────────────────────
+// ── Main Pipeline Page ───────────────────────────────────────────────────────
 
 export default function Pipeline() {
   const stats = usePipelineStats()
   const runs = usePipelineRuns()
+  const modelInfo = useModelInfo()
   const [expandedRun, setExpandedRun] = useState<string | null>(null)
   const [tab, setTab] = useState<'architecture' | 'runs' | 'stats'>('architecture')
+  const [triggering, setTriggering] = useState(false)
 
   if (stats.isLoading) return <LoadingSpinner />
   if (stats.isError) return <ErrorState onRetry={() => stats.refetch()} />
 
   const s = stats.data
+
+  async function handleTrigger() {
+    setTriggering(true)
+    try {
+      const baseUrl = import.meta.env.VITE_API_URL ?? ''
+      await fetch(`${baseUrl}/api/pipeline/trigger`, { method: 'POST' })
+      runs.refetch()
+      stats.refetch()
+    } finally {
+      setTriggering(false)
+    }
+  }
 
   return (
     <div className="animate-slide-up">
@@ -227,16 +203,16 @@ export default function Pipeline() {
       <div className="mb-8">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-stagger">
           <MetricCard
-            label="System Updates"
+            label="Pipeline Runs"
             value={s?.total_runs}
-            subtitle={`${Math.round((s?.success_rate ?? 0) * 100)}% completed`}
+            subtitle={`${Math.round((s?.success_rate ?? 0) * 100)}% success`}
           />
-          <MetricCard label="Facilities" value={s?.facilities_monitored} subtitle="reporting" />
-          <MetricCard label="Medicines" value={s?.drugs_tracked} subtitle="WHO essential list" />
+          <MetricCard label="Mandis" value={s?.mandis_monitored} subtitle="monitored" />
+          <MetricCard label="Commodities" value={s?.commodities_tracked} subtitle="tracked" />
           <MetricCard
             label="Running Cost"
             value={`$${s?.total_cost_usd?.toFixed(2) ?? '0'}`}
-            subtitle={`$${s?.avg_cost_per_run_usd?.toFixed(3) ?? '0'} per update`}
+            subtitle="total spend"
           />
         </div>
       </div>
@@ -249,7 +225,7 @@ export default function Pipeline() {
             className={`tab-item ${tab === t ? 'active' : ''}`}
             onClick={() => setTab(t)}
           >
-            {t === 'architecture' ? 'System Design' : t === 'runs' ? 'Update History' : 'Cost & Reliability'}
+            {t === 'architecture' ? 'System Design' : t === 'runs' ? 'Run History' : 'Cost & Model'}
           </button>
         ))}
       </div>
@@ -257,53 +233,31 @@ export default function Pipeline() {
       {/* Architecture Tab */}
       {tab === 'architecture' && (
         <div className="animate-tab-enter space-y-6">
-          <div className="section-header">From Reports to Recommendations in 6 Steps</div>
+          <div className="section-header">From Scraping to Sell Advice in 6 Steps</div>
           <ArchitectureDiagram />
 
           <div className="mt-8">
             <div className="section-header">Data Sources & AI Capabilities</div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Weather Data</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">NASA Satellite</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Daily temperature, rainfall, and humidity from NASA's global monitoring network.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Price Data</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">2 Government Sources</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Agmarknet (national) and eNAM (electronic trading) \u2014 often conflicting.</p>
               </div>
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Facility Data</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">3 Reporting Channels</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Pharmacist stock reports, disease surveillance, and community health worker messages.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Markets</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">15 Tamil Nadu Mandis</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Regulated agricultural markets across the state with daily price reporting.</p>
               </div>
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Medicines</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">WHO Essential List</p>
-                <p className="text-xs text-warm-body m-0 mt-1">15 essential medicines with dosing, costs, storage needs, and seasonal demand patterns.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Forecasting</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">XGBoost + 15 Features</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Gradient-boosted trees trained on 3 years of price data with seasonal and weather features.</p>
               </div>
               <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">AI Processing</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">4 Specialized AI Agents</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Reading reports, verifying data, detecting problems, and building procurement recommendations.</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
-              <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Demand Prediction</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">AI-Powered Forecast</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Learns from 20 factors including consumption history, facility size, and disease patterns. 99.8% accurate.</p>
-              </div>
-              <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Self-Correcting</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">Automatic Error Correction</p>
-                <p className="text-xs text-warm-body m-0 mt-1">A second model reviews the first and fixes systematic mistakes, improving accuracy further.</p>
-              </div>
-              <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Quality Control</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">Unusual Pattern Detection</p>
-                <p className="text-xs text-warm-body m-0 mt-1">Flags suspicious consumption — possible data errors, stock theft, or unexpected demand spikes.</p>
-              </div>
-              <div className="card card-body">
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">Clinical Knowledge</p>
-                <p className="text-sm font-bold text-[#1a1a1a] m-0">101 Guideline Articles</p>
-                <p className="text-xs text-warm-body m-0 mt-1">AI recommendations grounded in WHO, UNICEF, and MSH clinical and supply chain guidelines.</p>
+                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0 mb-1">AI Agents</p>
+                <p className="text-sm font-bold text-[#1a1a1a] m-0">3 Specialized Agents</p>
+                <p className="text-xs text-warm-body m-0 mt-1">Data extraction, price reconciliation, and sell recommendation generation.</p>
               </div>
             </div>
           </div>
@@ -313,7 +267,7 @@ export default function Pipeline() {
       {/* Runs Tab */}
       {tab === 'runs' && (
         <div className="animate-tab-enter space-y-6">
-          {/* Scheduler */}
+          {/* Scheduler + trigger */}
           <div className="card card-body">
             <div className="flex items-center justify-between">
               <div>
@@ -322,10 +276,19 @@ export default function Pipeline() {
                   {s?.last_run ? new Date(s.last_run).toLocaleString() : 'Never'}
                 </p>
                 <p className="text-xs text-warm-muted m-0 mt-1">
-                  Scheduled daily at 06:00 UTC. Runs automatically when the API is active.
+                  Scheduled daily at 06:00 IST. Scrapes both sources and regenerates all forecasts.
                 </p>
               </div>
-              <StatusBadge status={s?.last_run ? 'active' : 'pending'} />
+              <div className="flex items-center gap-3">
+                <StatusBadge status={s?.last_run ? 'active' : 'pending'} />
+                <button
+                  className="btn-primary text-xs"
+                  onClick={handleTrigger}
+                  disabled={triggering}
+                >
+                  {triggering ? 'Running...' : 'Run Now'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -410,12 +373,103 @@ export default function Pipeline() {
             <CostBreakdown />
           </div>
 
+          {/* Model info */}
           <div>
-            <div className="section-header">Degradation Chain</div>
-            <p className="text-xs text-warm-muted mb-4 -mt-1">
-              Every component has a fallback. If one tier fails, the system degrades gracefully to the next.
-            </p>
-            <DegradationChain />
+            <div className="section-header">Price Forecasting Model</div>
+            {modelInfo.isLoading ? (
+              <LoadingSpinner message="Loading model info..." />
+            ) : modelInfo.isError ? (
+              <ErrorState onRetry={() => modelInfo.refetch()} />
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className="text-xs font-sans font-semibold px-3 py-1 rounded-full"
+                    style={{ backgroundColor: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd' }}
+                  >
+                    XGBoost Price Forecaster
+                  </span>
+                  {modelInfo.data?.model_metrics?.features && (
+                    <span
+                      className="text-xs font-sans font-semibold px-3 py-1 rounded-full"
+                      style={{ backgroundColor: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d' }}
+                    >
+                      {modelInfo.data.model_metrics.features.length} Features
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <MetricCard
+                    label="Avg Error (RMSE)"
+                    value={modelInfo.data?.model_metrics?.rmse?.toFixed(1) ?? '--'}
+                    subtitle="typical prediction miss"
+                  />
+                  <MetricCard
+                    label="Avg Deviation (MAE)"
+                    value={modelInfo.data?.model_metrics?.mae?.toFixed(1) ?? '--'}
+                    subtitle="average absolute error"
+                  />
+                  <MetricCard
+                    label="Accuracy (R\u00b2)"
+                    value={modelInfo.data?.model_metrics?.r2 ? `${(modelInfo.data.model_metrics.r2 * 100).toFixed(1)}%` : '--'}
+                    subtitle="variance explained"
+                  />
+                  <MetricCard
+                    label="Training Samples"
+                    value={modelInfo.data?.model_metrics?.train_samples?.toLocaleString() ?? '--'}
+                    subtitle="historical price records"
+                  />
+                </div>
+
+                {/* Feature importances */}
+                {modelInfo.data?.model_metrics?.feature_importances && (
+                  <div className="card card-body">
+                    <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] mb-3">
+                      What Drives the Forecast
+                    </h3>
+                    <div className="space-y-2">
+                      {Object.entries(modelInfo.data.model_metrics.feature_importances)
+                        .sort(([, a], [, b]) => b - a)
+                        .slice(0, 10)
+                        .map(([feature, importance]) => (
+                          <div key={feature} className="flex items-center gap-3">
+                            <span className="text-xs text-warm-body w-36 shrink-0 capitalize">
+                              {feature.replace(/_/g, ' ')}
+                            </span>
+                            <div className="flex-1 h-2 bg-warm-header-bg rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${Math.round(importance * 100)}%`,
+                                  backgroundColor: '#d4a019',
+                                }}
+                              />
+                            </div>
+                            <span className="text-xs text-warm-muted w-10 text-right">
+                              {Math.round(importance * 100)}%
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Data sources */}
+                {s?.data_sources && s.data_sources.length > 0 && (
+                  <div className="card card-body">
+                    <h3 className="text-sm font-semibold font-sans text-[#1a1a1a] mb-2">
+                      Data Sources
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                      {s.data_sources.map((src) => (
+                        <span key={src} className="badge-amber text-[0.7rem]">{src}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

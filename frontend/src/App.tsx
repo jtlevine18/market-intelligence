@@ -3,11 +3,11 @@ import { Routes, Route, useNavigate, useSearchParams } from 'react-router-dom'
 import Joyride, { type CallBackProps, STATUS, EVENTS, ACTIONS } from 'react-joyride'
 import { Package } from 'lucide-react'
 import Sidebar from './components/Sidebar'
-import Dashboard from './pages/Dashboard'
-import Inputs from './pages/Inputs'
-import Demand from './pages/Demand'
-import Procurement from './pages/Procurement'
+import MarketPrices from './pages/MarketPrices'
+import Forecast from './pages/Forecast'
+import SellOptimizer from './pages/SellOptimizer'
 import Pipeline from './pages/Pipeline'
+import Inputs from './pages/Inputs'
 import { tourSteps, stepRoutes, tourStyles } from './lib/tour'
 
 export default function App() {
@@ -19,12 +19,12 @@ export default function App() {
   // Auto-start on first visit, or when ?tour=true
   useEffect(() => {
     const forced = searchParams.get('tour') === 'true'
-    const seen = localStorage.getItem('health_tour_v2') === '1'
+    const seen = localStorage.getItem('market_tour_v1') === '1'
     if (forced || !seen) {
       const timer = setTimeout(() => {
         setRunTour(true)
         setStepIndex(0)
-        localStorage.setItem('health_tour_v2', '1')
+        localStorage.setItem('market_tour_v1', '1')
       }, 1500)
       return () => clearTimeout(timer)
     }
@@ -59,7 +59,6 @@ export default function App() {
         const currentRoute = stepRoutes[index]
         const needsNav = nextRoute !== undefined && nextRoute !== currentRoute
 
-        // Pause briefly so tooltip unmounts cleanly
         setRunTour(false)
 
         if (needsNav) {
@@ -97,11 +96,11 @@ export default function App() {
 
         <main className="flex-1 px-8 pb-8">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/inputs" element={<Inputs />} />
-            <Route path="/demand" element={<Demand />} />
-            <Route path="/procurement" element={<Procurement />} />
+            <Route path="/" element={<MarketPrices />} />
+            <Route path="/forecast" element={<Forecast />} />
+            <Route path="/sell" element={<SellOptimizer />} />
             <Route path="/pipeline" element={<Pipeline />} />
+            <Route path="/inputs" element={<Inputs />} />
           </Routes>
         </main>
       </div>

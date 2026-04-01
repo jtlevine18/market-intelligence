@@ -1,7 +1,7 @@
 """
-Pipeline scheduler — daily automated runs via APScheduler.
+Pipeline scheduler -- daily automated runs via APScheduler.
 
-Runs the health supply chain pipeline daily at 06:00 UTC.
+Runs the market intelligence pipeline daily at 06:00 UTC.
 Persists scheduler state to scheduler_state.json.
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.pipeline import HealthSupplyChainPipeline
+from src.pipeline import MarketIntelligencePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +64,13 @@ class PipelineScheduler:
                 self._run_pipeline,
                 trigger=CronTrigger(hour=6, minute=0),
                 id="daily_pipeline",
-                name="Daily Health Supply Chain Pipeline",
+                name="Daily Market Intelligence Pipeline",
                 replace_existing=True,
             )
             self._scheduler.start()
             self._state["enabled"] = True
             self._save_state()
-            logger.info("Pipeline scheduler started — daily run at 06:00 UTC")
+            logger.info("Pipeline scheduler started -- daily run at 06:00 UTC")
 
     def stop(self):
         """Stop the background scheduler."""
@@ -83,12 +83,11 @@ class PipelineScheduler:
             logger.info("Pipeline scheduler stopped")
 
     def trigger(self) -> dict:
-        """Trigger an immediate pipeline run (non-blocking).
-
-        Returns a dict with run status info.
-        """
-        if self._running:
-            return {"status": "already_running", "message": "A pipeline run is already in progress"}
+        """Trigger an immediate pipeline run (non-blocking)."""
+        with self._lock:
+            if self._running:
+                return {"status": "already_running", "message": "A pipeline run is already in progress"}
+            self._running = True
 
         thread = threading.Thread(target=self._run_pipeline, daemon=True)
         thread.start()
@@ -96,32 +95,25 @@ class PipelineScheduler:
 
     def _run_pipeline(self):
         """Execute a pipeline run (called by scheduler or manual trigger)."""
-        if self._running:
-            logger.warning("Pipeline already running, skipping")
-            return
-
-        self._running = True
         try:
             import asyncio
+            import os
             logger.info("Starting scheduled pipeline run")
-            pipeline = HealthSupplyChainPipeline(
-                days_back=90,
-                use_claude_healer=True,
-                planning_months=3,
+            has_claude = bool(os.getenv("ANTHROPIC_API_KEY"))
+            pipeline = MarketIntelligencePipeline(
+                days_back=30,
+                use_claude_extraction=has_claude,
+                use_claude_reconciliation=has_claude,
+                use_claude_recommender=has_claude,
             )
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(pipeline.run())
-            finally:
-                loop.close()
+            result = asyncio.run(pipeline.run())
 
             self._state["total_runs"] = self._state.get("total_runs", 0) + 1
             self._state["last_run_at"] = datetime.utcnow().isoformat()
             self._state["last_status"] = result.status
             self._save_state()
 
-            logger.info("Scheduled pipeline run complete — status=%s", result.status)
+            logger.info("Scheduled pipeline run complete -- status=%s", result.status)
         except Exception:
             logger.exception("Scheduled pipeline run failed")
             self._state["last_status"] = "failed"

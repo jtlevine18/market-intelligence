@@ -12,11 +12,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import faiss
-import numpy as np
-from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
-
 from src.rag.knowledge_base import KNOWLEDGE_BASE, KnowledgeChunk
 
 log = logging.getLogger(__name__)
@@ -35,15 +30,23 @@ class RAGProvider:
 
     def __init__(self):
         self._chunks: list[KnowledgeChunk] = KNOWLEDGE_BASE
-        self._bm25: BM25Okapi | None = None
-        self._faiss_index: faiss.IndexFlatIP | None = None
-        self._embedder: SentenceTransformer | None = None
+        self._bm25 = None
+        self._faiss_index = None
+        self._embedder = None
+        self._np = None
         self._initialized = False
 
     def _initialize(self) -> None:
         """Build BM25 and FAISS indices from the knowledge base."""
         if self._initialized:
             return
+
+        import faiss
+        import numpy as np
+        from rank_bm25 import BM25Okapi
+        from sentence_transformers import SentenceTransformer
+
+        self._np = np
 
         texts = [self._chunk_text(c) for c in self._chunks]
 
@@ -97,12 +100,12 @@ class RAGProvider:
 
         # BM25 retrieval
         bm25_scores = self._bm25.get_scores(query.lower().split())
-        bm25_ranking = np.argsort(bm25_scores)[::-1][:k_retrieve]
+        bm25_ranking = self._np.argsort(bm25_scores)[::-1][:k_retrieve]
 
         # FAISS semantic retrieval
         query_emb = self._embedder.encode(
             [query], normalize_embeddings=True, show_progress_bar=False,
-        ).astype(np.float32)
+        ).astype(self._np.float32)
         faiss_scores, faiss_indices = self._faiss_index.search(query_emb, k_retrieve)
         faiss_ranking = faiss_indices[0]
 

@@ -1,55 +1,50 @@
 """
-Health Supply Chain Optimizer -- Main Pipeline Orchestrator
+Post-Harvest Market Intelligence -- Main Pipeline Orchestrator
 
 6-step pipeline: INGEST -> EXTRACT -> RECONCILE -> FORECAST -> OPTIMIZE -> RECOMMEND
 
 Each step has independent fallbacks -- no cascading failures.
-Follows the same StepResult/PipelineRunResult pattern as climate-risk-engine.
+Follows the same StepResult/PipelineRunResult pattern as the climate-risk-engine
+and health supply chain projects.
 """
 
 import asyncio
-import json
 import logging
 import math
-import random
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, date, timedelta
 
 from config import (
-    FACILITIES,
-    FACILITY_MAP,
-    DRUG_MAP,
-    ESSENTIAL_MEDICINES,
+    COMMODITIES,
+    COMMODITY_MAP,
+    MANDIS,
+    MANDI_MAP,
     PIPELINE_STEPS,
-    DEFAULT_PARAMS,
+    SAMPLE_FARMERS,
+    SEASONAL_INDICES,
+    BASE_PRICES_RS,
 )
-from src.ingestion.nasa_power import fetch_all_facilities_nasa_power, DailyReading
-from src.ingestion.lmis_simulator import simulate_all_facilities, StockReading, _get_season
-from src.forecasting.demand import forecast_demand, forecast_to_dicts, DemandForecast
-from src.forecasting.model import XGBoostDemandModel, FACILITY_TYPE_ENC, CATEGORY_ENC
-from src.forecasting.residual_model import ResidualCorrectionModel
-from src.forecasting.chronos_model import (
-    ChronosBoltForecaster,
-    build_series_from_training_data,
-    ensemble_predictions,
+from src.ingestion.agmarknet import fetch_mandi_prices, PriceRecord
+from src.ingestion.enam_scraper import fetch_enam_prices
+from src.ingestion.nasa_power import fetch_all_mandis_nasa_power, DailyReading
+from src.extraction.agent import ExtractionAgent, RuleBasedExtractor
+from src.reconciliation.agent import ReconciliationAgent, RuleBasedReconciler
+from src.forecasting.price_model import (
+    XGBoostPriceModel,
+    PriceForecast,
+    generate_training_data,
 )
-from src.anomaly.detector import ConsumptionAnomalyDetector
-
-# Singleton — avoids reloading the 9M-parameter model on every pipeline run
-_chronos_forecaster = ChronosBoltForecaster()
-from src.optimizer import optimize, plan_to_dict, ProcurementPlan
-from src.procurement_agent import ProcurementAgent, ProcurementRecommendation
+from src.optimizer import optimize_sell, recommendation_to_dict, SellRecommendation, assess_credit_readiness, credit_readiness_to_dict
+from src.recommendation_agent import RecommendationAgent, FarmerRecommendation
 from src.store import store
 from src import db as persistence
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Step / Pipeline result dataclasses
-# ---------------------------------------------------------------------------
+# ── Step / Pipeline result dataclasses ───────────────────────────────────
 
 @dataclass
 class StepResult:
@@ -68,381 +63,55 @@ class PipelineRunResult:
     ended_at: str
     status: str  # ok, partial, failed
     steps: list[StepResult]
-    facilities_processed: int
-    drugs_tracked: int
-    stockout_risks_found: int
+    mandis_processed: int
+    commodities_tracked: int
+    price_conflicts_found: int
     total_cost_usd: float
     duration_s: float
 
 
-# ---------------------------------------------------------------------------
-# Text input generators (stock reports, IDSR, CHW messages)
-# ---------------------------------------------------------------------------
+# ── Pipeline class ───────────────────────────────────────────────────────
 
-def _generate_stock_report(fac, stock_readings: list, rng: random.Random) -> str:
-    """Generate a realistic unstructured stock report text for a facility."""
-    fid = fac.facility_id
-    drug_readings = {}
-    for r in stock_readings:
-        if isinstance(r, dict):
-            did = r.get("drug_id", "")
-            if r.get("reported") and did:
-                drug_readings[did] = r
-        else:
-            did = getattr(r, "drug_id", "")
-            if getattr(r, "reported", False) and did:
-                drug_readings[did] = {
-                    "drug_id": did,
-                    "stock_level": getattr(r, "stock_level", 0),
-                    "consumption_today": getattr(r, "consumption_today", 0),
-                    "days_of_stock_remaining": getattr(r, "days_of_stock_remaining", 0),
-                }
-
-    lines = [
-        f"MONTHLY STOCK REPORT - {fac.name}",
-        f"District: {fac.district}, {fac.country}",
-        f"Date: {datetime.utcnow().strftime('%d %B %Y')}",
-        f"Prepared by: {fac.name} Pharmacist",
-        "",
-        "CURRENT STOCK STATUS:",
-    ]
-
-    for did, r in list(drug_readings.items())[:8]:
-        drug = DRUG_MAP.get(did)
-        if drug:
-            stock = r.get("stock_level", 0) or 0
-            dos = r.get("days_of_stock_remaining", 0) or 0
-            status = "ADEQUATE" if dos > 30 else "LOW" if dos > 7 else "CRITICAL"
-            lines.append(
-                f"  {drug['name']}: {stock:.0f} {drug['unit']} on hand, "
-                f"~{dos:.0f} days supply. Status: {status}"
-            )
-
-    # Add some narrative
-    critical_drugs = [
-        did for did, r in drug_readings.items()
-        if (r.get("days_of_stock_remaining") or 999) < 14 and DRUG_MAP.get(did, {}).get("critical")
-    ]
-    if critical_drugs:
-        names = [DRUG_MAP[d]["name"] for d in critical_drugs if d in DRUG_MAP]
-        lines.append(f"\nURGENT: {', '.join(names)} at critically low levels. "
-                      "Request emergency resupply.")
-
-    if fac.reporting_quality == "poor":
-        lines.append("\nNote: Some stock counts may be approximate. "
-                      "Physical count delayed due to staffing shortages.")
-
-    lines.append(f"\nTotal drugs tracked: {len(drug_readings)}")
-    lines.append(f"Cold chain status: {'Functional' if fac.has_cold_chain else 'Not available'}")
-    return "\n".join(lines)
-
-
-def _generate_idsr_report(fac, rng: random.Random) -> str:
-    """Generate a realistic IDSR (Integrated Disease Surveillance & Response) report."""
-    pop = fac.population_served
-    malaria_cases = rng.randint(int(pop * 0.002), int(pop * 0.008))
-    diarrhoea_cases = rng.randint(int(pop * 0.001), int(pop * 0.005))
-    ari_cases = rng.randint(int(pop * 0.001), int(pop * 0.004))
-    measles_cases = rng.randint(0, 3)
-
-    lines = [
-        f"IDSR WEEKLY EPIDEMIOLOGICAL REPORT",
-        f"Facility: {fac.name}",
-        f"District: {fac.district}, {fac.country}",
-        f"Week: {datetime.utcnow().strftime('W%W %Y')}",
-        "",
-        "REPORTABLE DISEASE CASES THIS WEEK:",
-        f"  Malaria (confirmed + clinical): {malaria_cases}",
-        f"  Acute watery diarrhoea: {diarrhoea_cases}",
-        f"  Acute respiratory infections: {ari_cases}",
-        f"  Measles (suspected): {measles_cases}",
-        "",
-        f"MALARIA POSITIVITY RATE: {rng.randint(25, 65)}%",
-        f"TOTAL OPD ATTENDANCE: {rng.randint(int(pop * 0.005), int(pop * 0.015))}",
-    ]
-
-    if malaria_cases > pop * 0.005:
-        lines.append("\nALERT: Malaria cases above epidemic threshold. "
-                      "Increased ACT and RDT consumption expected.")
-
-    if diarrhoea_cases > pop * 0.003:
-        lines.append("\nALERT: Diarrhoea cluster detected. Possible contaminated water source. "
-                      "ORS and Zinc demand increasing.")
-
-    return "\n".join(lines)
-
-
-def _generate_chw_messages(fac, rng: random.Random) -> list[str]:
-    """Generate realistic CHW (Community Health Worker) text messages."""
-    templates = [
-        "ORS finished in ward {ward}. {n} children with diarrhoea this week. Pls resupply urgent",
-        "Malaria cases increasing. Used {n} RDTs today, only {rem} left. Need more ACT too",
-        "Paracetamol and amoxicillin running low. {n} patients turned away today",
-        "Cold chain fridge broken since Monday. Oxytocin may be compromised",
-        "Stock count done. ACT-20: {stock} courses, ORS: {ors} sachets. Both below minimum",
-        "Community health outreach tomorrow. Need extra Zinc and ORS for under-5 program",
-        "3 suspected malaria cases referred to facility. No RDTs available in community",
-        "Monthly CHW report: served {n} households. Main complaints: fever, diarrhoea, cough",
-    ]
-
-    n_messages = min(fac.chw_count, rng.randint(2, 5))
-    messages = []
-    for i in range(n_messages):
-        template = rng.choice(templates)
-        msg = template.format(
-            ward=rng.randint(1, 8),
-            n=rng.randint(3, 25),
-            rem=rng.randint(2, 15),
-            stock=rng.randint(5, 50),
-            ors=rng.randint(10, 80),
-        )
-        messages.append(f"CHW-{fac.facility_id}-{i+1}: {msg}")
-    return messages
-
-
-def generate_all_inputs(
-    facilities=None,
-    stock_by_facility: dict | None = None,
-    seed: int = 42,
-) -> dict:
-    """Generate all text inputs (stock reports, IDSR, CHW messages) for all facilities.
-
-    Returns a dict keyed by facility_id with sub-keys:
-        stock_report, idsr_report, chw_messages
+class MarketIntelligencePipeline:
     """
-    if facilities is None:
-        facilities = FACILITIES
-    rng = random.Random(seed)
+    End-to-end post-harvest market intelligence pipeline.
 
-    result = {}
-    for fac in facilities:
-        fid = fac.facility_id
-        stock_readings = (stock_by_facility or {}).get(fid, [])
-        result[fid] = {
-            "stock_report": _generate_stock_report(fac, stock_readings, rng),
-            "idsr_report": _generate_idsr_report(fac, rng),
-            "chw_messages": _generate_chw_messages(fac, rng),
-        }
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Regex-based extraction fallback
-# ---------------------------------------------------------------------------
-
-def _regex_extract(raw_inputs: dict) -> dict:
-    """Regex-based extraction of structured data from text inputs.
-
-    Extracts drug stock levels from stock reports and disease cases from IDSR.
-    Used as fallback when Claude extraction agent is unavailable.
-    """
-    import re
-    extracted = {}
-
-    for fid, inputs in raw_inputs.items():
-        fac_data = {"facility_id": fid, "drugs": {}, "disease_cases": {}, "alerts": []}
-
-        # Parse stock report
-        report = inputs.get("stock_report", "")
-        for drug in ESSENTIAL_MEDICINES:
-            pattern = re.escape(drug["name"]) + r":\s*([\d,.]+)\s*\w+\s*on hand.*?~([\d,.]+)\s*days"
-            match = re.search(pattern, report)
-            if match:
-                stock_level = float(match.group(1).replace(",", ""))
-                days_supply = float(match.group(2).replace(",", ""))
-                fac_data["drugs"][drug["drug_id"]] = {
-                    "stock_level": stock_level,
-                    "days_of_stock": days_supply,
-                    "source": "stock_report",
-                }
-
-        # Parse IDSR report
-        idsr = inputs.get("idsr_report", "")
-        malaria_match = re.search(r"Malaria.*?:\s*(\d+)", idsr)
-        if malaria_match:
-            fac_data["disease_cases"]["malaria"] = int(malaria_match.group(1))
-        diarrhoea_match = re.search(r"diarrhoea.*?:\s*(\d+)", idsr, re.IGNORECASE)
-        if diarrhoea_match:
-            fac_data["disease_cases"]["diarrhoea"] = int(diarrhoea_match.group(1))
-        ari_match = re.search(r"respiratory.*?:\s*(\d+)", idsr, re.IGNORECASE)
-        if ari_match:
-            fac_data["disease_cases"]["ari"] = int(ari_match.group(1))
-
-        # Parse CHW messages for urgency signals
-        for msg in inputs.get("chw_messages", []):
-            if any(kw in msg.lower() for kw in ["urgent", "finished", "broken", "no rdt"]):
-                fac_data["alerts"].append(msg)
-
-        extracted[fid] = fac_data
-
-    return extracted
-
-
-# ---------------------------------------------------------------------------
-# Simple reconciliation fallback
-# ---------------------------------------------------------------------------
-
-def _simple_reconcile(
-    extracted_data: dict,
-    stock_by_facility: dict,
-) -> dict:
-    """Rule-based reconciliation: cross-validate extracted vs. simulated stock data.
-
-    Returns reconciled data with conflict log per facility.
-    """
-    reconciled = {}
-
-    for fid, extracted in extracted_data.items():
-        conflicts = []
-        stock_by_drug = {}
-
-        # Start from simulated/ingested stock data as baseline
-        sim_readings = stock_by_facility.get(fid, [])
-        latest_by_drug: dict[str, dict] = {}
-        for r in sim_readings:
-            if isinstance(r, dict):
-                did = r.get("drug_id", "")
-                reported = r.get("reported", False)
-            else:
-                did = getattr(r, "drug_id", "")
-                reported = getattr(r, "reported", False)
-
-            if not reported or not did:
-                continue
-
-            if isinstance(r, dict):
-                rdata = r
-            else:
-                rdata = {
-                    "drug_id": did,
-                    "stock_level": getattr(r, "stock_level", 0),
-                    "consumption_today": getattr(r, "consumption_today", 0),
-                    "days_of_stock_remaining": getattr(r, "days_of_stock_remaining", 0),
-                }
-
-            if did not in latest_by_drug:
-                latest_by_drug[did] = rdata
-            else:
-                existing_date = latest_by_drug[did].get("date", "")
-                new_date = rdata.get("date", "")
-                if new_date > existing_date:
-                    latest_by_drug[did] = rdata
-
-        # Reconcile with extracted values
-        for did, sim_data in latest_by_drug.items():
-            drug = DRUG_MAP.get(did)
-            if not drug:
-                continue
-
-            sim_stock = sim_data.get("stock_level", 0) or 0
-            sim_daily = sim_data.get("consumption_today", 0) or 0
-            sim_dos = sim_data.get("days_of_stock_remaining", 0) or 0
-
-            ext_drug = extracted.get("drugs", {}).get(did, {})
-            ext_stock = ext_drug.get("stock_level")
-
-            final_stock = sim_stock
-            final_daily = sim_daily
-
-            # If extracted value exists, check for conflict
-            if ext_stock is not None and abs(ext_stock - sim_stock) > sim_stock * 0.20:
-                conflicts.append({
-                    "drug_id": did,
-                    "drug_name": drug["name"],
-                    "field": "stock_level",
-                    "simulated_value": sim_stock,
-                    "extracted_value": ext_stock,
-                    "resolution": "averaged",
-                    "reasoning": (
-                        f"Stock report says {ext_stock:.0f} but LMIS shows {sim_stock:.0f}. "
-                        f"Difference is >{20}%. Using average as reconciled value."
-                    ),
-                })
-                final_stock = (sim_stock + ext_stock) / 2
-
-            # Negative stock correction
-            if final_stock < 0:
-                conflicts.append({
-                    "drug_id": did,
-                    "drug_name": drug["name"],
-                    "field": "stock_level",
-                    "original_value": final_stock,
-                    "corrected_value": 0,
-                    "resolution": "corrected",
-                    "reasoning": "Negative stock corrected to 0",
-                })
-                final_stock = 0
-
-            final_dos = final_stock / final_daily if final_daily > 0 else 999
-
-            stock_by_drug[did] = {
-                "stock_level": round(final_stock, 1),
-                "consumption_daily": round(final_daily, 1),
-                "days_of_stock_remaining": round(final_dos, 1),
-                "source": "reconciled",
-            }
-
-        reconciled[fid] = {
-            "facility_id": fid,
-            "stock_by_drug": stock_by_drug,
-            "conflicts": conflicts,
-            "disease_cases": extracted.get("disease_cases", {}),
-            "quality_score": max(0.5, 1.0 - len(conflicts) * 0.05),
-        }
-
-    return reconciled
-
-
-# ---------------------------------------------------------------------------
-# Pipeline class
-# ---------------------------------------------------------------------------
-
-class HealthSupplyChainPipeline:
-    """
-    End-to-end health supply chain optimization pipeline.
-
-    Step 1 (INGEST):     Generate text inputs + fetch NASA POWER climate data
-    Step 2 (EXTRACT):    Extract structured data from stock reports, IDSR, CHW messages
-    Step 3 (RECONCILE):  Cross-validate and reconcile data sources
-    Step 4 (FORECAST):   Climate -> disease -> drug demand prediction
-    Step 5 (OPTIMIZE):   Claude cross-facility procurement agent (or greedy fallback)
-    Step 6 (RECOMMEND):  Generate alerts and recommendations
+    Step 1 (INGEST):     Fetch Agmarknet API prices + eNAM prices + NASA POWER weather
+    Step 2 (EXTRACT):    Normalize, deduplicate, flag stale/anomalous entries
+    Step 3 (RECONCILE):  Resolve Agmarknet vs eNAM conflicts into trusted prices
+    Step 4 (FORECAST):   Predict prices at 7/14/30 day horizons
+    Step 5 (OPTIMIZE):   Compute sell options for sample farmer locations
+    Step 6 (RECOMMEND):  Generate Claude-powered sell recommendations in English + Tamil
     """
 
     def __init__(
         self,
-        days_back: int = 90,
+        days_back: int = 30,
         use_claude_extraction: bool = True,
         use_claude_reconciliation: bool = True,
-        use_claude_optimizer: bool = True,
         use_claude_recommender: bool = True,
-        planning_months: int = 3,
     ):
         self.days_back = days_back
         self.use_claude_extraction = use_claude_extraction
         self.use_claude_reconciliation = use_claude_reconciliation
-        self.use_claude_optimizer = use_claude_optimizer
         self.use_claude_recommender = use_claude_recommender
-        self.planning_months = planning_months
 
         # Pipeline state
-        self._raw_inputs: dict = {}
+        self._agmarknet_prices: dict[str, list[PriceRecord]] = {}
+        self._enam_prices: dict[str, list[PriceRecord]] = {}
         self._climate: dict[str, list] = {}
-        self._stock: dict[str, list] = {}
         self._extracted_data: dict = {}
-        self._reconciled_data: dict = {}
-        self._forecasts: dict[str, list[DemandForecast]] = {}
-        self._forecast_dicts: list[dict] = []
-        self._procurement: ProcurementRecommendation | None = None
-        self._procurement_plans: dict[str, ProcurementPlan] = {}
-        self._alerts: list[dict] = []
+        self._reconciled_data: dict = {}  # mandi_id -> {commodity_id -> {price, conf, ...}}
+        self._forecasts: list[PriceForecast] = []
+        self._forecast_by_mandi: dict[str, dict] = {}
+        self._sell_recommendations: dict[str, dict] = {}
+        self._farmer_recommendations: list[FarmerRecommendation] = []
         self._model_metrics: dict = {}
-        self._rag_retrievals: list[dict] = []
+        self._price_conflicts: list[dict] = []
 
-        # Token/cost tracking per step
+        # Token tracking
         self._extraction_tokens: int = 0
         self._reconciliation_tokens: int = 0
-        self._optimization_tokens: int = 0
         self._recommendation_tokens: int = 0
 
     async def run(self) -> PipelineRunResult:
@@ -450,20 +119,18 @@ class HealthSupplyChainPipeline:
         run_id = str(uuid.uuid4())[:8]
         started_at = datetime.utcnow()
 
-        # Initialize database if configured
         persistence.init_db()
         steps: list[StepResult] = []
         total_cost = 0.0
 
         logger.info(
-            "Pipeline run %s starting -- %d facilities, %d days back",
-            run_id, len(FACILITIES), self.days_back,
+            "Pipeline run %s starting -- %d mandis, %d commodities, %d days back",
+            run_id, len(MANDIS), len(COMMODITIES), self.days_back,
         )
 
         # Step 1: INGEST
         step1 = await self._step_ingest(run_id)
         steps.append(step1)
-
         if step1.status == "failed":
             logger.error("Ingestion failed completely -- aborting pipeline")
             return self._finalize(run_id, started_at, steps, "failed")
@@ -485,7 +152,6 @@ class HealthSupplyChainPipeline:
         # Step 5: OPTIMIZE
         step5 = await self._step_optimize(run_id)
         steps.append(step5)
-        total_cost += step5.details.get("cost_usd", 0)
 
         # Step 6: RECOMMEND
         step6 = await self._step_recommend(run_id)
@@ -494,56 +160,49 @@ class HealthSupplyChainPipeline:
 
         result = self._finalize(run_id, started_at, steps, total_cost=total_cost)
 
-        # Push results to the store for the API
+        # Push to store
         self._update_store(result)
 
         logger.info(
-            "Pipeline run %s complete -- status=%s, stockouts=%d, cost=$%.4f, duration=%.1fs",
-            run_id, result.status, result.stockout_risks_found,
+            "Pipeline run %s complete -- status=%s, conflicts=%d, cost=$%.4f, duration=%.1fs",
+            run_id, result.status, result.price_conflicts_found,
             result.total_cost_usd, result.duration_s,
         )
         return result
 
-    # -- Step 1: INGEST -------------------------------------------------------
+    # ── Step 1: INGEST ───────────────────────────────────────────────────
 
     async def _step_ingest(self, run_id: str) -> StepResult:
-        """Ingest text data (stock reports, IDSR, CHW messages) + NASA POWER climate."""
+        """Fetch Agmarknet + eNAM + NASA POWER data."""
         t0 = time.time()
         errors = []
 
         try:
-            # Run stock simulation + NASA POWER fetch concurrently
-            # (text generation depends on stock, so it goes after simulation)
-            async def _ingest_stock_and_text():
-                stock_results = simulate_all_facilities(FACILITIES, days_back=self.days_back)
-                for fid, readings in stock_results.items():
-                    self._stock[fid] = [
-                        {
-                            "facility_id": r.facility_id,
-                            "drug_id": r.drug_id,
-                            "date": r.date,
-                            "stock_level": r.stock_level,
-                            "consumption_today": r.consumption_today,
-                            "days_of_stock_remaining": r.days_of_stock_remaining,
-                            "reported": r.reported,
-                            "data_quality": r.data_quality,
-                        }
-                        for r in readings
-                    ]
-                self._raw_inputs = generate_all_inputs(
-                    facilities=FACILITIES,
-                    stock_by_facility=self._stock,
-                )
+            async def _ingest_agmarknet():
+                try:
+                    self._agmarknet_prices = await fetch_mandi_prices(
+                        MANDIS, COMMODITIES, days_back=self.days_back,
+                    )
+                except Exception as e:
+                    errors.append(f"Agmarknet fetch failed: {e}")
+
+            async def _ingest_enam():
+                try:
+                    self._enam_prices = await fetch_enam_prices(
+                        MANDIS, COMMODITIES, days_back=min(14, self.days_back),
+                    )
+                except Exception as e:
+                    errors.append(f"eNAM fetch failed: {e}")
 
             async def _ingest_climate():
                 try:
-                    climate_results = await fetch_all_facilities_nasa_power(
-                        FACILITIES, days_back=self.days_back,
+                    climate_results = await fetch_all_mandis_nasa_power(
+                        MANDIS, days_back=self.days_back,
                     )
-                    for fid, readings in climate_results.items():
-                        self._climate[fid] = [
+                    for mid, readings in climate_results.items():
+                        self._climate[mid] = [
                             {
-                                "facility_id": r.facility_id,
+                                "mandi_id": r.mandi_id,
                                 "date": r.date,
                                 "precip_mm": r.precip_mm,
                                 "temp_mean_c": r.temp_mean_c,
@@ -557,53 +216,88 @@ class HealthSupplyChainPipeline:
                 except Exception as e:
                     errors.append(f"NASA POWER fetch failed: {e}")
 
-            await asyncio.gather(_ingest_stock_and_text(), _ingest_climate())
+            await asyncio.gather(
+                _ingest_agmarknet(), _ingest_enam(), _ingest_climate(),
+            )
 
-            total_stock_readings = sum(len(v) for v in self._stock.values())
-            total_climate_readings = sum(len(v) for v in self._climate.values())
+            total_agm = sum(len(v) for v in self._agmarknet_prices.values())
+            total_enam = sum(len(v) for v in self._enam_prices.values())
+            total_climate = sum(len(v) for v in self._climate.values())
 
             status = "ok" if not errors else "partial"
             return StepResult(
                 step="ingest", status=status, duration_s=time.time() - t0,
-                records_processed=total_stock_readings + total_climate_readings,
+                records_processed=total_agm + total_enam + total_climate,
                 errors=errors,
                 details={
-                    "facilities": len(FACILITIES),
-                    "stock_readings": total_stock_readings,
-                    "climate_readings": total_climate_readings,
-                    "text_inputs_generated": len(self._raw_inputs),
+                    "mandis": len(MANDIS),
+                    "agmarknet_records": total_agm,
+                    "enam_records": total_enam,
+                    "climate_readings": total_climate,
                 },
             )
         except Exception as e:
-            logger.exception(f"Ingestion step failed: {e}")
+            logger.exception("Ingestion step failed: %s", e)
             return StepResult(
                 step="ingest", status="failed", duration_s=time.time() - t0,
                 errors=[str(e)],
             )
 
-    # -- Step 2: EXTRACT -------------------------------------------------------
+    # ── Step 2: EXTRACT ──────────────────────────────────────────────────
 
     async def _step_extract(self, run_id: str) -> StepResult:
-        """Extract structured data from stock reports, IDSR, CHW messages."""
+        """Normalize and validate price data."""
         t0 = time.time()
         errors = []
 
         try:
-            # For now, use regex-based extraction as the primary path.
-            # Claude ExtractionAgent would be plugged in here when available.
-            if self.use_claude_extraction:
-                try:
-                    # Placeholder for Claude extraction agent
-                    raise NotImplementedError("ExtractionAgent not yet implemented")
-                except Exception as exc:
-                    errors.append(f"Claude extraction unavailable: {exc}")
-                    logger.warning("Claude extraction unavailable: %s -- using regex", exc)
+            extractor = RuleBasedExtractor()
 
-            # Regex fallback
-            self._extracted_data = _regex_extract(self._raw_inputs)
+            for mandi in MANDIS:
+                mid = mandi.mandi_id
+                agm_records = [
+                    {
+                        "commodity_id": r.commodity_id,
+                        "commodity_name": COMMODITY_MAP.get(r.commodity_id, {}).get("agmarknet_name", ""),
+                        "date": r.date,
+                        "min_price_rs": r.min_price_rs,
+                        "max_price_rs": r.max_price_rs,
+                        "modal_price_rs": r.modal_price_rs,
+                        "arrivals_tonnes": r.arrivals_tonnes,
+                        "source": r.source,
+                        "quality_flag": r.quality_flag,
+                    }
+                    for r in self._agmarknet_prices.get(mid, [])
+                ]
+                enam_records = [
+                    {
+                        "commodity_id": r.commodity_id,
+                        "commodity_name": COMMODITY_MAP.get(r.commodity_id, {}).get("agmarknet_name", ""),
+                        "date": r.date,
+                        "min_price_rs": r.min_price_rs,
+                        "max_price_rs": r.max_price_rs,
+                        "modal_price_rs": r.modal_price_rs,
+                        "arrivals_tonnes": r.arrivals_tonnes,
+                        "source": r.source,
+                        "quality_flag": r.quality_flag,
+                    }
+                    for r in self._enam_prices.get(mid, [])
+                ]
 
-            total_drugs_extracted = sum(
-                len(v.get("drugs", {})) for v in self._extracted_data.values()
+                all_records = agm_records + enam_records
+                if all_records:
+                    result = extractor.extract_prices(all_records, mid)
+                    self._extracted_data[mid] = {
+                        "mandi_id": mid,
+                        "normalized_count": len(result.normalized_prices),
+                        "stale_count": len(result.stale_entries),
+                        "anomaly_count": len(result.anomalies),
+                        "confidence": result.confidence,
+                        "method": result.extraction_method,
+                    }
+
+            total_extracted = sum(
+                v.get("normalized_count", 0) for v in self._extracted_data.values()
             )
 
             est_cost = self._extraction_tokens * 0.005 / 1000
@@ -611,51 +305,53 @@ class HealthSupplyChainPipeline:
             return StepResult(
                 step="extract", status="ok" if not errors else "partial",
                 duration_s=time.time() - t0,
-                records_processed=len(self._extracted_data),
+                records_processed=total_extracted,
                 errors=errors,
                 details={
-                    "extractor": "regex_fallback" if errors else "claude",
-                    "facilities_extracted": len(self._extracted_data),
-                    "total_drugs_extracted": total_drugs_extracted,
+                    "extractor": "rule_based",
+                    "mandis_extracted": len(self._extracted_data),
+                    "total_records": total_extracted,
                     "total_tokens": self._extraction_tokens,
                     "cost_usd": est_cost,
                 },
             )
         except Exception as e:
-            logger.exception(f"Extraction step failed: {e}")
+            logger.exception("Extraction step failed: %s", e)
             return StepResult(
                 step="extract", status="failed", duration_s=time.time() - t0,
                 errors=[str(e)],
             )
 
-    # -- Step 3: RECONCILE -----------------------------------------------------
+    # ── Step 3: RECONCILE ────────────────────────────────────────────────
 
     async def _step_reconcile(self, run_id: str) -> StepResult:
-        """Cross-validate and reconcile extracted data with LMIS + climate."""
+        """Resolve Agmarknet vs eNAM price conflicts."""
         t0 = time.time()
         errors = []
 
         try:
-            if self.use_claude_reconciliation:
-                try:
-                    raise NotImplementedError("ReconciliationAgent not yet implemented")
-                except Exception as exc:
-                    errors.append(f"Claude reconciliation unavailable: {exc}")
-                    logger.warning("Claude reconciliation unavailable: %s -- using rules", exc)
+            reconciler = RuleBasedReconciler()
 
-            # Rule-based fallback
-            self._reconciled_data = _simple_reconcile(
-                self._extracted_data,
-                self._stock,
-            )
+            for mandi in MANDIS:
+                mid = mandi.mandi_id
 
-            total_conflicts = sum(
-                len(v.get("conflicts", [])) for v in self._reconciled_data.values()
-            )
-            avg_quality = sum(
-                v.get("quality_score", 0) for v in self._reconciled_data.values()
-            ) / max(1, len(self._reconciled_data))
+                # Build latest prices by commodity from each source
+                agm_latest = self._latest_prices_by_commodity(
+                    self._agmarknet_prices.get(mid, []),
+                )
+                enam_latest = self._latest_prices_by_commodity(
+                    self._enam_prices.get(mid, []),
+                )
 
+                result = reconciler.reconcile(mid, agm_latest, enam_latest)
+                self._reconciled_data[mid] = result.reconciled_prices
+
+                for conflict in result.conflicts_found:
+                    conflict["mandi_id"] = mid
+                    conflict["mandi_name"] = mandi.name
+                    self._price_conflicts.append(conflict)
+
+            total_conflicts = len(self._price_conflicts)
             est_cost = self._reconciliation_tokens * 0.005 / 1000
 
             return StepResult(
@@ -664,339 +360,272 @@ class HealthSupplyChainPipeline:
                 records_processed=len(self._reconciled_data),
                 errors=errors,
                 details={
-                    "reconciler": "rule_based" if errors else "claude",
-                    "facilities_reconciled": len(self._reconciled_data),
+                    "reconciler": "rule_based",
+                    "mandis_reconciled": len(self._reconciled_data),
                     "total_conflicts": total_conflicts,
-                    "avg_quality_score": round(avg_quality, 3),
                     "total_tokens": self._reconciliation_tokens,
                     "cost_usd": est_cost,
                 },
             )
         except Exception as e:
-            logger.exception(f"Reconciliation step failed: {e}")
+            logger.exception("Reconciliation step failed: %s", e)
             return StepResult(
                 step="reconcile", status="failed", duration_s=time.time() - t0,
                 errors=[str(e)],
             )
 
-    # -- Step 4: FORECAST ------------------------------------------------------
+    def _latest_prices_by_commodity(
+        self, records: list[PriceRecord],
+    ) -> dict[str, dict]:
+        """Get the latest price for each commodity from a list of PriceRecords."""
+        latest: dict[str, dict] = {}
+        for r in records:
+            existing = latest.get(r.commodity_id)
+            if existing is None or r.date > existing.get("date", ""):
+                latest[r.commodity_id] = {
+                    "commodity_id": r.commodity_id,
+                    "date": r.date,
+                    "min_price_rs": r.min_price_rs,
+                    "max_price_rs": r.max_price_rs,
+                    "modal_price_rs": r.modal_price_rs,
+                    "arrivals_tonnes": r.arrivals_tonnes,
+                    "source": r.source,
+                    "quality_flag": r.quality_flag,
+                }
+        return latest
+
+    # ── Step 4: FORECAST ─────────────────────────────────────────────────
 
     async def _step_forecast(self, run_id: str) -> StepResult:
-        """Demand forecasting: epidemiological formulas + XGBoost + residual correction."""
+        """Price forecasting at 7/14/30 day horizons."""
         t0 = time.time()
 
         try:
-            # Layer 1: Epidemiological formulas (climate -> disease -> demand)
-            climate_data = self._climate if self._climate else {}
-            self._forecasts = forecast_demand(
-                climate_by_facility=climate_data,
-                stock_by_facility=self._stock,
-                planning_months=self.planning_months,
-            )
-            self._forecast_dicts = forecast_to_dicts(self._forecasts)
+            import pandas as pd
+            import numpy as np
+            from src.forecasting.price_model import _days_since_harvest, _days_until_harvest, MARKET_TYPE_ENC, CATEGORY_ENC
 
-            total_forecasts = sum(len(v) for v in self._forecasts.values())
-            climate_driven = sum(
-                sum(1 for f in v if f.climate_driven)
-                for v in self._forecasts.values()
-            )
+            # Build feature DataFrame from reconciled prices
+            rows = []
+            today = date.today()
 
-            # Layer 2: XGBoost model (load pre-trained or train on the fly)
-            model_type = "epidemiological_formulas"
-            xgb_model = XGBoostDemandModel()
-            residual_model = ResidualCorrectionModel()
-            training_df = None  # cached for reuse by residual model
+            for mandi in MANDIS:
+                mid = mandi.mandi_id
+                mandi_prices = self._reconciled_data.get(mid, {})
 
-            try:
-                xgb_model.load()
-                model_type = "xgboost"
-                logger.info("Loaded pre-trained XGBoost model")
-            except FileNotFoundError:
-                logger.info("No pre-trained XGBoost model — training on the fly")
-                training_df = xgb_model.build_training_data(months_back=6, seed=42)
-                xgb_model.train(training_df)
-                xgb_model.save()
-                model_type = "xgboost"
-
-            # Layer 2.5: Chronos-Bolt neural foundation model (zero-shot)
-            chronos_preds: dict = {}
-            if _chronos_forecaster.is_available:
-                if training_df is None:
-                    training_df = xgb_model.build_training_data(months_back=6, seed=42)
-                series = build_series_from_training_data(training_df)
-                chronos_preds = _chronos_forecaster.predict_batch(series, prediction_length=1)
-                if chronos_preds:
-                    model_type += "+chronos_bolt"
-                    logger.info("Chronos-Bolt predictions: %d series", len(chronos_preds))
-
-            # Layer 3: Residual correction (MOS pattern)
-            try:
-                residual_model.load()
-                model_type = model_type.replace("xgboost", "xgboost+residual_correction", 1)
-                logger.info("Loaded pre-trained residual correction model")
-            except FileNotFoundError:
-                if xgb_model.is_trained():
-                    try:
-                        if training_df is None:
-                            training_df = xgb_model.build_training_data(months_back=6, seed=42)
-                        res_df = residual_model.build_residual_data(xgb_model, training_df)
-                        residual_model.train(res_df)
-                        residual_model.save()
-                        model_type = model_type.replace("xgboost", "xgboost+residual_correction", 1)
-                    except Exception:
-                        logger.warning("Residual model training failed — continuing with primary only")
-
-            # Ensemble Chronos predictions into forecast dicts
-            if chronos_preds and xgb_model.is_trained():
-                for fc in self._forecast_dicts:
-                    key = f"{fc['facility_id']}|{fc['drug_id']}"
-                    cp = chronos_preds.get(key)
-                    if not cp:
+                for commodity in COMMODITIES:
+                    cid = commodity["id"]
+                    if cid not in mandi.commodities_traded:
                         continue
-                    # Get XGBoost prediction for this item
-                    xgb_pred = fc.get("predicted_demand_monthly", fc.get("baseline_demand_monthly", 0))
-                    pi = fc.get("prediction_interval", {})
-                    xgb_lower = pi.get("lower", xgb_pred * 0.8)
-                    xgb_upper = pi.get("upper", xgb_pred * 1.2)
-                    ens = ensemble_predictions(
-                        xgb_pred, xgb_lower, xgb_upper,
-                        cp["median"], cp["lower_10"], cp["upper_90"],
-                    )
-                    fc["ensemble"] = ens
-                    fc["prediction_interval"] = {
-                        "lower": ens["ensemble_lower"],
-                        "upper": ens["ensemble_upper"],
-                    }
 
-            # Model metrics from trained models
+                    price_data = mandi_prices.get(cid, {})
+                    current_price = price_data.get("price_rs", 0)
+                    if current_price <= 0:
+                        current_price = BASE_PRICES_RS.get(cid, 0) * SEASONAL_INDICES.get(cid, {}).get(today.month, 1.0)
+
+                    # Compute features from historical data
+                    agm_records = [r for r in self._agmarknet_prices.get(mid, []) if r.commodity_id == cid]
+                    prices = [r.modal_price_rs for r in sorted(agm_records, key=lambda x: x.date)]
+
+                    trend_7 = float(np.polyfit(range(len(prices[-7:])), prices[-7:], 1)[0]) if len(prices) >= 7 else 0
+                    trend_14 = float(np.polyfit(range(len(prices[-14:])), prices[-14:], 1)[0]) if len(prices) >= 14 else 0
+                    trend_30 = float(np.polyfit(range(len(prices[-30:])), prices[-30:], 1)[0]) if len(prices) >= 30 else 0
+
+                    vol_30 = float(np.std(prices[-30:]) / np.mean(prices[-30:])) if len(prices) >= 30 and np.mean(prices[-30:]) > 0 else 0.05
+
+                    harvest_months = []
+                    for hw in commodity.get("harvest_windows", []):
+                        harvest_months.extend(hw.get("months", []))
+
+                    # Average arrivals over recent records
+                    arrivals = [r.arrivals_tonnes for r in agm_records[-7:]]
+                    avg_arrivals = sum(arrivals) / len(arrivals) if arrivals else mandi.avg_daily_arrivals_tonnes * 0.5
+
+                    # Climate averages
+                    climate_records = self._climate.get(mid, [])
+                    recent_climate = climate_records[-7:] if climate_records else []
+                    avg_rainfall = sum(c.get("precip_mm", 0) or 0 for c in recent_climate) / max(1, len(recent_climate))
+                    avg_temp = sum(c.get("temp_mean_c", 28) or 28 for c in recent_climate) / max(1, len(recent_climate))
+
+                    rows.append({
+                        "mandi_id": mid,
+                        "commodity_id": cid,
+                        "current_reconciled_price": current_price,
+                        "price_trend_7d": round(trend_7, 2),
+                        "price_trend_14d": round(trend_14, 2),
+                        "price_trend_30d": round(trend_30, 2),
+                        "price_volatility_30d": round(vol_30, 4),
+                        "seasonal_index": SEASONAL_INDICES.get(cid, {}).get(today.month, 1.0),
+                        "days_since_harvest": _days_since_harvest(today, harvest_months),
+                        "days_until_next_harvest": _days_until_harvest(today, harvest_months),
+                        "mandi_arrival_volume_7d_avg": round(avg_arrivals, 1),
+                        "rainfall_7d": round(avg_rainfall, 1),
+                        "temperature_7d_avg": round(avg_temp, 1),
+                        "month_sin": round(math.sin(2 * math.pi * today.month / 12), 4),
+                        "month_cos": round(math.cos(2 * math.pi * today.month / 12), 4),
+                        "commodity_category_encoded": CATEGORY_ENC.get(commodity["category"], 0),
+                        "mandi_market_type_encoded": MARKET_TYPE_ENC.get(mandi.market_type, 0),
+                    })
+
+            if not rows:
+                return StepResult(
+                    step="forecast", status="skipped", duration_s=time.time() - t0,
+                    errors=["No price data to forecast"],
+                )
+
+            features_df = pd.DataFrame(rows)
+
+            # Train or load model
+            model = XGBoostPriceModel()
+            model_type = "seasonal_baseline"
+
+            try:
+                model.load()
+                model_type = "xgboost"
+                logger.info("Loaded pre-trained XGBoost price model")
+            except (FileNotFoundError, Exception):
+                logger.info("No pre-trained model -- training on synthetic data")
+                try:
+                    training_df = generate_training_data(months_back=6, seed=42)
+                    model.train(training_df)
+                    model.save()
+                    model_type = "xgboost"
+                except Exception as exc:
+                    logger.warning("XGBoost training failed: %s -- using seasonal baseline", exc)
+
+            self._forecasts = model.predict(features_df)
             self._model_metrics = {
                 "model_type": model_type,
-                "primary_model": xgb_model.metrics if xgb_model.is_trained() else {},
-                "residual_model": residual_model.metrics if residual_model.is_trained() else {},
-                "chronos_model": _chronos_forecaster.model_info,
-                "features": list(xgb_model.feature_importances.keys()) if xgb_model.is_trained() else [],
-                "feature_importances": xgb_model.feature_importances if xgb_model.is_trained() else {},
+                "metrics": model.metrics,
+                "features": model.FEATURES,
+                "feature_importances": model.feature_importances,
             }
+
+            # Build forecast lookup: mandi_id -> {commodity_id -> forecast_dict}
+            for fc in self._forecasts:
+                mid = fc.mandi_id
+                cid = fc.commodity_id
+                if mid not in self._forecast_by_mandi:
+                    self._forecast_by_mandi[mid] = {}
+                self._forecast_by_mandi[mid][cid] = {
+                    "price_7d": fc.price_7d,
+                    "price_14d": fc.price_14d,
+                    "price_30d": fc.price_30d,
+                    "ci_lower_7d": fc.ci_lower_7d,
+                    "ci_upper_7d": fc.ci_upper_7d,
+                    "direction": fc.direction,
+                    "confidence": fc.confidence,
+                }
 
             return StepResult(
                 step="forecast", status="ok", duration_s=time.time() - t0,
-                records_processed=total_forecasts,
+                records_processed=len(self._forecasts),
                 details={
-                    "total_forecasts": total_forecasts,
-                    "climate_driven": climate_driven,
-                    "facilities": len(self._forecasts),
+                    "total_forecasts": len(self._forecasts),
                     "model_type": model_type,
+                    "mandis": len(set(fc.mandi_id for fc in self._forecasts)),
                 },
             )
         except Exception as e:
-            logger.exception(f"Forecasting step failed: {e}")
+            logger.exception("Forecasting step failed: %s", e)
             return StepResult(
                 step="forecast", status="failed", duration_s=time.time() - t0,
                 errors=[str(e)],
             )
 
-    # -- Step 5: OPTIMIZE ------------------------------------------------------
+    # ── Step 5: OPTIMIZE ─────────────────────────────────────────────────
 
     async def _step_optimize(self, run_id: str) -> StepResult:
-        """Claude cross-facility procurement agent (or greedy fallback)."""
+        """Compute sell options for sample farmer locations."""
         t0 = time.time()
-        errors = []
 
         try:
-            # Build demand forecast dicts keyed by facility for the agent
-            forecast_by_fac: dict[str, list] = {}
-            for fc_dict in self._forecast_dicts:
-                fid = fc_dict.get("facility_id")
-                if fid:
-                    forecast_by_fac.setdefault(fid, []).append(fc_dict)
-
-            if self.use_claude_optimizer:
-                try:
-                    agent = ProcurementAgent(
-                        reconciled_data=self._reconciled_data,
-                        demand_forecasts=forecast_by_fac,
-                    )
-                    self._procurement = await agent.optimize()
-                    self._optimization_tokens = self._procurement.tokens_used
-                except Exception as exc:
-                    errors.append(f"Claude optimizer failed: {exc}")
-                    logger.warning("Claude optimizer failed: %s -- using greedy", exc)
-                    agent = ProcurementAgent(
-                        reconciled_data=self._reconciled_data,
-                        demand_forecasts=forecast_by_fac,
-                    )
-                    self._procurement = agent._greedy_fallback(reason=str(exc))
-            else:
-                agent = ProcurementAgent(
-                    reconciled_data=self._reconciled_data,
-                    demand_forecasts=forecast_by_fac,
+            for farmer in SAMPLE_FARMERS:
+                rec = optimize_sell(
+                    farmer_lat=farmer.latitude,
+                    farmer_lon=farmer.longitude,
+                    commodity_id=farmer.primary_commodity,
+                    quantity_quintals=farmer.quantity_quintals,
+                    reconciled_prices=self._reconciled_data,
+                    forecasted_prices=self._forecast_by_mandi,
                 )
-                self._procurement = agent._greedy_fallback(reason="Claude optimizer disabled")
+                rec_dict = recommendation_to_dict(rec)
 
-            # Also run per-facility greedy for the existing API shape
-            for fac in FACILITIES:
-                fid = fac.facility_id
-                fac_forecasts = self._forecasts.get(fid, [])
-
-                season = "rainy"
-                for fc in fac_forecasts:
-                    if fc.category == "Antimalarials" and fc.demand_multiplier > 1.0:
-                        season = "rainy"
-                        break
-                    elif fc.category == "Antimalarials" and fc.demand_multiplier < 0.8:
-                        season = "dry"
-                        break
-
-                plan = optimize(
-                    population=fac.population_served,
-                    budget_usd=fac.budget_usd_quarterly,
-                    planning_months=self.planning_months,
-                    season=season,
-                    supply_source="regional_depot",
-                    wastage_pct=8,
-                    prioritize_critical=True,
+                # Credit readiness — farmer-facing assessment
+                credit = assess_credit_readiness(
+                    rec,
+                    has_storage=farmer.has_storage,
                 )
-                self._procurement_plans[fid] = plan
+                rec_dict["credit_readiness"] = credit_readiness_to_dict(credit)
 
-            total_orders = sum(
-                len(p.orders) for p in self._procurement_plans.values()
-            )
-            stockout_risks = sum(
-                sum(1 for o in p.orders if o.stockout_risk in ("high", "critical"))
-                for p in self._procurement_plans.values()
-            )
+                self._sell_recommendations[farmer.farmer_id] = rec_dict
 
-            est_cost = self._optimization_tokens * 0.005 / 1000
+            total_options = sum(
+                len(v.get("all_options", []))
+                for v in self._sell_recommendations.values()
+            )
 
             return StepResult(
-                step="optimize", status="ok" if not errors else "partial",
-                duration_s=time.time() - t0,
-                records_processed=total_orders,
-                errors=errors,
+                step="optimize", status="ok", duration_s=time.time() - t0,
+                records_processed=len(self._sell_recommendations),
                 details={
-                    "optimization_method": self._procurement.optimization_method if self._procurement else "greedy_fallback",
-                    "facilities_optimized": len(self._procurement_plans),
-                    "total_orders": total_orders,
-                    "stockout_risks": stockout_risks,
-                    "redistributions": len(self._procurement.redistributions) if self._procurement else 0,
-                    "total_tokens": self._optimization_tokens,
-                    "cost_usd": est_cost,
+                    "farmers_optimized": len(self._sell_recommendations),
+                    "total_options_computed": total_options,
                 },
             )
         except Exception as e:
-            logger.exception(f"Optimization step failed: {e}")
+            logger.exception("Optimization step failed: %s", e)
             return StepResult(
                 step="optimize", status="failed", duration_s=time.time() - t0,
                 errors=[str(e)],
             )
 
-    # -- Step 6: RECOMMEND -----------------------------------------------------
+    # ── Step 6: RECOMMEND ────────────────────────────────────────────────
 
     async def _step_recommend(self, run_id: str) -> StepResult:
-        """Generate alerts and recommendations."""
+        """Generate Claude-powered sell recommendations."""
         t0 = time.time()
+        errors = []
 
         try:
-            for fac in FACILITIES:
-                fid = fac.facility_id
-                plan = self._procurement_plans.get(fid)
-                if not plan:
-                    continue
+            agent = RecommendationAgent()
 
-                for order in plan.orders:
-                    if order.stockout_risk in ("high", "critical"):
-                        forecasts = self._forecasts.get(fid, [])
-                        drug_forecast = next(
-                            (f for f in forecasts if f.drug_id == order.drug_id),
-                            None,
-                        )
-
-                        alert = {
-                            "facility_id": fid,
-                            "facility_name": fac.name,
-                            "district": fac.district,
-                            "drug_id": order.drug_id,
-                            "drug_name": order.name,
-                            "category": order.category,
-                            "critical": order.critical,
-                            "stockout_risk": order.stockout_risk,
-                            "coverage_pct": order.coverage_pct,
-                            "days_of_stock": order.days_of_stock,
-                            "demand_qty": order.demand_qty,
-                            "ordered_qty": order.ordered_qty,
-                            "shortfall_qty": order.total_need - order.ordered_qty,
-                            "shortfall_cost_usd": round(
-                                (order.total_need - order.ordered_qty) * order.unit_cost_usd, 2,
-                            ),
-                            "climate_driven": drug_forecast.climate_driven if drug_forecast else False,
-                            "demand_multiplier": drug_forecast.demand_multiplier if drug_forecast else 1.0,
-                            "recommendation": self._generate_recommendation(
-                                fac, order, drug_forecast,
-                            ),
-                        }
-                        self._alerts.append(alert)
+            for farmer in SAMPLE_FARMERS:
+                try:
+                    sell_rec = self._sell_recommendations.get(farmer.farmer_id, {})
+                    rec = agent.recommend(
+                        farmer=farmer,
+                        reconciled_prices=self._reconciled_data,
+                        forecasted_prices=self._forecast_by_mandi,
+                        sell_recommendation=sell_rec,
+                        climate_data=self._climate,
+                    )
+                    self._farmer_recommendations.append(rec)
+                    self._recommendation_tokens += rec.tokens_used
+                except Exception as exc:
+                    errors.append(f"Recommendation for {farmer.name} failed: {exc}")
 
             est_cost = self._recommendation_tokens * 0.005 / 1000
 
             return StepResult(
-                step="recommend", status="ok" if self._alerts else "skipped",
+                step="recommend", status="ok" if not errors else "partial",
                 duration_s=time.time() - t0,
-                records_processed=len(self._alerts),
+                records_processed=len(self._farmer_recommendations),
+                errors=errors,
                 details={
-                    "alerts_generated": len(self._alerts),
-                    "critical_alerts": sum(
-                        1 for a in self._alerts if a["stockout_risk"] == "critical"
-                    ),
+                    "recommendations_generated": len(self._farmer_recommendations),
                     "total_tokens": self._recommendation_tokens,
                     "cost_usd": est_cost,
                 },
             )
         except Exception as e:
-            logger.exception(f"Recommendation step failed: {e}")
+            logger.exception("Recommendation step failed: %s", e)
             return StepResult(
                 step="recommend", status="failed", duration_s=time.time() - t0,
                 errors=[str(e)],
             )
 
-    def _generate_recommendation(self, fac, order, forecast) -> str:
-        """Generate a procurement recommendation string."""
-        parts = []
-
-        if order.stockout_risk == "critical":
-            parts.append(f"URGENT: {order.name} at critically low stock.")
-        else:
-            parts.append(f"{order.name} at risk of stockout within {order.days_of_stock} days.")
-
-        if forecast and forecast.climate_driven and forecast.demand_multiplier > 1.3:
-            parts.append(
-                f"Climate-driven demand increase ({forecast.demand_multiplier:.1f}x baseline) "
-                f"due to {forecast.contributing_factors[0].get('factor', 'seasonal')} conditions."
-            )
-
-        shortfall = order.total_need - order.ordered_qty
-        if shortfall > 0:
-            parts.append(
-                f"Budget shortfall: need {shortfall} {order.unit} "
-                f"(${shortfall * order.unit_cost_usd:.2f}) beyond current allocation."
-            )
-
-        if order.critical:
-            parts.append("This is a critical/essential medicine -- prioritize procurement.")
-
-        # Add redistribution note if procurement agent found one
-        if self._procurement and self._procurement.redistributions:
-            for redist in self._procurement.redistributions:
-                if redist.get("drug_id") == order.drug_id:
-                    parts.append(
-                        f"Redistribution available: {redist.get('quantity', 0)} units "
-                        f"from {redist.get('from_facility', '?')} "
-                        f"(transit: {redist.get('transit_days', '?')} days)."
-                    )
-                    break
-
-        return " ".join(parts)
-
-    # -- Finalize --------------------------------------------------------------
+    # ── Finalize ─────────────────────────────────────────────────────────
 
     def _finalize(
         self, run_id: str, started_at: datetime,
@@ -1016,20 +645,15 @@ class HealthSupplyChainPipeline:
             else:
                 status = "ok"
 
-        stockout_risks = sum(
-            sum(1 for o in p.orders if o.stockout_risk in ("high", "critical"))
-            for p in self._procurement_plans.values()
-        )
-
         return PipelineRunResult(
             run_id=run_id,
             started_at=started_at.isoformat(),
             ended_at=ended_at.isoformat(),
             status=status,
             steps=steps,
-            facilities_processed=len(self._reconciled_data) or len(FACILITIES),
-            drugs_tracked=len(ESSENTIAL_MEDICINES),
-            stockout_risks_found=stockout_risks,
+            mandis_processed=len(self._reconciled_data) or len(MANDIS),
+            commodities_tracked=len(COMMODITIES),
+            price_conflicts_found=len(self._price_conflicts),
             total_cost_usd=total_cost,
             duration_s=duration,
         )
@@ -1037,90 +661,71 @@ class HealthSupplyChainPipeline:
     def _update_store(self, result: PipelineRunResult):
         """Push pipeline results to the shared store for the API."""
         try:
-            # Build facility summaries
-            facilities = []
-            for fac in FACILITIES:
-                fid = fac.facility_id
-                rec = self._reconciled_data.get(fid, {})
-                plan = self._procurement_plans.get(fid)
-
-                facilities.append({
-                    "facility_id": fid,
-                    "name": fac.name,
-                    "district": fac.district,
-                    "country": fac.country,
-                    "latitude": fac.latitude,
-                    "longitude": fac.longitude,
-                    "facility_type": fac.facility_type,
-                    "population_served": fac.population_served,
-                    "reporting_quality": fac.reporting_quality,
-                    "data_quality_score": rec.get("quality_score", 0.0),
-                    "budget_usd": fac.budget_usd_quarterly,
-                    "budget_used_usd": plan.budget_used_usd if plan else 0,
-                    "stockout_risks": (
-                        sum(1 for o in plan.orders if o.stockout_risk in ("high", "critical"))
-                        if plan else 0
-                    ),
+            mandis = []
+            for m in MANDIS:
+                rec = self._reconciled_data.get(m.mandi_id, {})
+                mandis.append({
+                    "mandi_id": m.mandi_id,
+                    "name": m.name,
+                    "district": m.district,
+                    "state": m.state,
+                    "latitude": m.latitude,
+                    "longitude": m.longitude,
+                    "market_type": m.market_type,
+                    "enam_integrated": m.enam_integrated,
+                    "reporting_quality": m.reporting_quality,
+                    "commodities_traded": m.commodities_traded,
+                    "commodities_with_prices": len(rec),
                 })
 
-            # Build stock levels
-            stock_levels = []
-            for fid, readings in self._stock.items():
-                fac = FACILITY_MAP.get(fid)
-                latest: dict[str, dict] = {}
-                for r in readings:
-                    if r.get("reported") and r.get("drug_id"):
-                        did = r["drug_id"]
-                        if did not in latest or r.get("date", "") > latest[did].get("date", ""):
-                            latest[did] = r
-
-                for drug_id, r in latest.items():
-                    drug = DRUG_MAP.get(drug_id, {})
-                    stock_levels.append({
-                        "facility_id": fid,
-                        "facility_name": fac.name if fac else fid,
-                        "drug_id": drug_id,
-                        "drug_name": drug.get("name", drug_id),
-                        "category": drug.get("category", ""),
-                        "stock_level": r.get("stock_level"),
-                        "consumption_daily": r.get("consumption_today"),
-                        "days_of_stock": r.get("days_of_stock_remaining"),
-                        "date": r.get("date"),
+            # Market prices (reconciled)
+            market_prices = []
+            for mid, commodities in self._reconciled_data.items():
+                mandi = MANDI_MAP.get(mid)
+                for cid, price_data in commodities.items():
+                    commodity = COMMODITY_MAP.get(cid, {})
+                    market_prices.append({
+                        "mandi_id": mid,
+                        "mandi_name": mandi.name if mandi else mid,
+                        "commodity_id": cid,
+                        "commodity_name": commodity.get("name", cid),
+                        "price_rs": price_data.get("price_rs", 0),
+                        "confidence": price_data.get("confidence", 0),
+                        "source_used": price_data.get("source_used", ""),
+                        "reasoning": price_data.get("reasoning", ""),
                     })
 
-            # Build demand forecasts
-            demand_forecasts = self._forecast_dicts
+            # Price forecasts
+            price_forecasts = []
+            for fc in self._forecasts:
+                commodity = COMMODITY_MAP.get(fc.commodity_id, {})
+                price_forecasts.append({
+                    "mandi_id": fc.mandi_id,
+                    "commodity_id": fc.commodity_id,
+                    "commodity_name": commodity.get("name", fc.commodity_id),
+                    "current_price": fc.current_price,
+                    "price_7d": fc.price_7d,
+                    "price_14d": fc.price_14d,
+                    "price_30d": fc.price_30d,
+                    "ci_lower_7d": fc.ci_lower_7d,
+                    "ci_upper_7d": fc.ci_upper_7d,
+                    "direction": fc.direction,
+                    "confidence": fc.confidence,
+                })
 
-            # Build procurement plans
-            procurement_plans = []
-            for fid, plan in self._procurement_plans.items():
-                fac = FACILITY_MAP.get(fid)
-                plan_dict = plan_to_dict(plan)
-                plan_dict["facility_id"] = fid
-                plan_dict["facility_name"] = fac.name if fac else fid
-                procurement_plans.append(plan_dict)
+            # Sell recommendations
+            sell_recs = list(self._sell_recommendations.values())
 
-            # Build stockout risks
-            stockout_risks = []
-            for fid, plan in self._procurement_plans.items():
-                fac = FACILITY_MAP.get(fid)
-                for order in plan.orders:
-                    if order.stockout_risk in ("high", "critical", "moderate"):
-                        stockout_risks.append({
-                            "facility_id": fid,
-                            "facility_name": fac.name if fac else fid,
-                            "drug_id": order.drug_id,
-                            "drug_name": order.name,
-                            "category": order.category,
-                            "critical": order.critical,
-                            "risk_level": order.stockout_risk,
-                            "coverage_pct": order.coverage_pct,
-                            "days_of_stock": order.days_of_stock,
-                            "shortfall_qty": order.total_need - order.ordered_qty,
-                            "shortfall_cost_usd": round(
-                                (order.total_need - order.ordered_qty) * order.unit_cost_usd, 2,
-                            ),
-                        })
+            # Recommendation reasoning
+            rec_reasoning = []
+            for rec in self._farmer_recommendations:
+                rec_reasoning.append({
+                    "farmer_id": rec.farmer_id,
+                    "farmer_name": rec.farmer_name,
+                    "recommendation_en": rec.recommendation_en,
+                    "reasoning_trace": rec.reasoning_trace,
+                    "tokens_used": rec.tokens_used,
+                })
 
             run_info = {
                 "run_id": result.run_id,
@@ -1128,9 +733,9 @@ class HealthSupplyChainPipeline:
                 "ended_at": result.ended_at,
                 "status": result.status,
                 "duration_s": round(result.duration_s, 1),
-                "facilities_processed": result.facilities_processed,
-                "drugs_tracked": result.drugs_tracked,
-                "stockout_risks_found": result.stockout_risks_found,
+                "mandis_processed": result.mandis_processed,
+                "commodities_tracked": result.commodities_tracked,
+                "price_conflicts_found": result.price_conflicts_found,
                 "total_cost_usd": round(result.total_cost_usd, 4),
                 "steps": [
                     {
@@ -1142,60 +747,25 @@ class HealthSupplyChainPipeline:
                 ],
             }
 
-            # Build procurement reasoning from agent
-            procurement_reasoning = []
-            if self._procurement:
-                procurement_reasoning = self._procurement.reasoning_trace
-
-            # Run anomaly detection on stock levels (batch scoring)
-            try:
-                detector = ConsumptionAnomalyDetector()
-                detector.load()
-                import pandas as _pd
-                from datetime import date as _date
-                now = datetime.utcnow()
-                rows = []
-                for sl in stock_levels:
-                    fac = FACILITY_MAP.get(sl["facility_id"], FACILITIES[0])
-                    drug = DRUG_MAP.get(sl.get("drug_id", ""), {})
-                    season = _get_season(_date(now.year, now.month, 15), fac.latitude)
-                    rows.append({
-                        "consumption_rate_per_1000": sl.get("consumption_daily", 0) * 30,
-                        "consumption_last_month": sl.get("consumption_daily", 0) * 30,
-                        "consumption_trend": 1.0,
-                        "population_served": fac.population_served,
-                        "facility_type_encoded": FACILITY_TYPE_ENC.get(fac.facility_type, 1),
-                        "drug_category_encoded": CATEGORY_ENC.get(drug.get("category", ""), 0),
-                        "month": now.month,
-                        "is_rainy_season": 1 if season == "rainy" else 0,
-                    })
-                if rows:
-                    scored = detector.score_batch(_pd.DataFrame(rows))
-                    for i, sl in enumerate(stock_levels):
-                        sl["anomaly_score"] = float(scored["anomaly_score"].iloc[i])
-                        sl["is_anomaly"] = bool(scored["is_anomaly"].iloc[i])
-            except Exception:
-                logger.debug("Anomaly detector not available — skipping scoring")
-
             run_data = {
-                "facilities": facilities,
-                "stock_levels": stock_levels,
-                "demand_forecasts": demand_forecasts,
-                "procurement_plan": procurement_plans,
-                "stockout_risks": stockout_risks,
-                "alerts": self._alerts,
+                "mandis": mandis,
+                "market_prices": market_prices,
+                "price_forecasts": price_forecasts,
+                "sell_recommendations": sell_recs,
+                "price_conflicts": self._price_conflicts,
                 "run_info": run_info,
-                "raw_inputs": self._raw_inputs,
+                "raw_inputs": {
+                    "agmarknet_mandis": len(self._agmarknet_prices),
+                    "enam_mandis": len(self._enam_prices),
+                    "climate_mandis": len(self._climate),
+                },
                 "extracted_data": self._extracted_data,
                 "reconciliation_results": self._reconciled_data,
                 "model_metrics": self._model_metrics,
-                "procurement_reasoning": procurement_reasoning,
-                "rag_retrievals": self._rag_retrievals,
+                "recommendation_reasoning": rec_reasoning,
             }
 
             store.update(run_data)
-
-            # Persist to database if configured
             persistence.save_pipeline_run(run_data)
 
         except Exception:
@@ -1204,5 +774,5 @@ class HealthSupplyChainPipeline:
 
 def run_pipeline_sync(**kwargs) -> PipelineRunResult:
     """Synchronous wrapper for the pipeline."""
-    pipeline = HealthSupplyChainPipeline(**kwargs)
+    pipeline = MarketIntelligencePipeline(**kwargs)
     return asyncio.run(pipeline.run())

@@ -1,19 +1,21 @@
 """
-Health Supply Chain Optimizer -- FastAPI Application
+Market Intelligence Agent -- FastAPI Application
+
+AI-powered market timing and routing for Tamil Nadu smallholder farmers.
 
 Serves synthetic demo data for the dashboard when the pipeline hasn't run.
 When the real pipeline has been run, serves pipeline results instead.
 
 Endpoints:
 - GET  /health                  -- Health check
-- GET  /api/facilities          -- Facility list with current stock status
-- GET  /api/stock-levels        -- Stock by drug x facility with stockout risk
-- GET  /api/demand-forecast     -- Predicted demand with climate factors
-- GET  /api/procurement-plan    -- Optimized plan with per-drug orders
-- GET  /api/stockout-risks      -- Drugs/facilities at risk
-- GET  /api/raw-inputs          -- Raw unstructured text (stock reports, IDSR, CHW)
-- GET  /api/extracted-data      -- What Claude extracted from each input
-- GET  /api/reconciled-data     -- Reconciled data with conflict resolution reasoning
+- GET  /api/mandis              -- Mandi list with current reporting status
+- GET  /api/market-prices       -- Reconciled prices by commodity x mandi
+- GET  /api/price-forecast      -- 7/14/30d price predictions with confidence
+- GET  /api/sell-recommendations -- Optimized sell options for sample farmers
+- GET  /api/price-conflicts     -- Where Agmarknet and eNAM disagreed + resolution
+- GET  /api/raw-inputs          -- Raw Agmarknet + eNAM data before processing
+- GET  /api/extracted-data      -- Normalized data after extraction
+- GET  /api/reconciled-data     -- Reconciled data with conflict log
 - GET  /api/model-info          -- XGBoost metrics, feature importances
 - GET  /api/pipeline/runs       -- Run history
 - GET  /api/pipeline/stats      -- Aggregate stats
@@ -23,7 +25,7 @@ Endpoints:
 import logging
 import random
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -32,38 +34,34 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 
 from config import (
-    ESSENTIAL_MEDICINES,
-    DRUG_MAP,
-    CATEGORIES,
-    FACILITIES,
-    FACILITY_MAP,
-    LEAD_TIMES,
-    DEFAULT_PARAMS,
+    COMMODITIES,
+    COMMODITY_MAP,
+    MANDIS,
+    MANDI_MAP,
     PIPELINE_STEPS,
+    SEASONAL_INDICES,
+    BASE_PRICES_RS,
+    POST_HARVEST_LOSS,
+    SAMPLE_FARMERS,
+    TRANSPORT_COST_RS_PER_QUINTAL_PER_KM,
+    MIN_TRANSPORT_COST_RS,
+    MANDI_FEE_PCT,
 )
-from src.forecasting.chronos_model import ChronosBoltForecaster
-from src.optimizer import optimize, plan_to_dict
+from src.geo import haversine_km
 from src.store import store
 from src.scheduler import scheduler
-from src.pipeline import generate_all_inputs
-from src.ingestion.lmis_simulator import simulate_all_facilities
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Health Supply Chain Optimizer",
-    description="Agentic supply chain monitoring + procurement optimization for district health officers",
-    version="2.0.0",
+    title="Market Intelligence Agent",
+    description="AI-powered market timing and routing for Tamil Nadu smallholder farmers",
+    version="1.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://jtlevine-health-supply-optimizer.hf.space",
-        "https://health-supply-optimizer.vercel.app",
-        "https://frontend-five-ruby-79.vercel.app",
-        "http://localhost:5173",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
@@ -72,474 +70,490 @@ app.add_middleware(
 SEED = 42
 
 
-# ---------------------------------------------------------------------------
-# Demo data generation (deterministic, seed=42)
-# ---------------------------------------------------------------------------
+# ── Demo data generation (deterministic, seed=42) ────────────────────────
+
+
+
+def _demo_credit_readiness(farmer, best_option: dict, all_options: list, potential_gain: float) -> dict:
+    """Generate demo credit readiness for a farmer based on sell optimization."""
+    if not best_option or best_option.get("net_price_rs", 0) <= 0:
+        return {"readiness": "not_yet", "advice_en": "No market data available.", "strengths": [], "risks": []}
+
+    expected = best_option["net_price_rs"] * farmer.quantity_quintals
+    worst_net = min((o.get("net_price_rs", 0) for o in all_options), default=0) if all_options else 0
+    min_rev = worst_net * farmer.quantity_quintals
+    max_advisable = expected * 0.40
+    strengths = []
+    risks = []
+
+    if farmer.has_storage:
+        strengths.append("Storage available — you can wait for better prices if needed")
+    else:
+        risks.append("No storage — you must sell quickly, limiting price flexibility")
+    if expected > 25_000 * 2:
+        strengths.append(f"Expected revenue (Rs {expected:,.0f}) is well above typical input costs")
+    if potential_gain > 0:
+        strengths.append(f"Agent found Rs {potential_gain:,.0f} more value by optimizing where and when you sell")
+
+    if len(risks) == 0 and expected > 25_000 * 2:
+        readiness = "strong"
+        advice = (f"Your {farmer.quantity_quintals:.0f} quintals should earn ~Rs {expected:,.0f}. "
+                  f"An input loan up to Rs {max_advisable:,.0f} looks manageable.")
+    elif expected > 25_000 * 1.5:
+        readiness = "moderate"
+        advice = (f"Expected revenue: ~Rs {expected:,.0f}. A smaller loan could work, "
+                  f"but keep it conservative (up to Rs {max_advisable:,.0f}).")
+    else:
+        readiness = "not_yet"
+        advice = (f"Revenue is uncertain (~Rs {expected:,.0f}). Consider waiting until after harvest, "
+                  f"or start with a very small amount.")
+
+    return {
+        "readiness": readiness,
+        "expected_revenue_rs": round(expected, 0),
+        "min_revenue_rs": round(min_rev, 0),
+        "max_advisable_input_loan_rs": round(max_advisable, 0),
+        "revenue_confidence": best_option.get("confidence", 0.7),
+        "loan_to_revenue_pct": round(max_advisable / expected * 100, 1) if expected else 0,
+        "strengths": strengths,
+        "risks": risks,
+        "advice_en": advice,
+        "advice_ta": "",
+    }
+
 
 def _generate_demo_data() -> dict:
     """Deterministic synthetic data that tells a coherent story.
 
     Story:
-    - It's rainy season: malaria drug demand is 2x normal
-    - Ajeromi PHC and Ungogo Health Post have poor reporting (missing data)
-    - ACT-20 is running low at 3 facilities (stockout risk: high)
-    - ORS demand spiking due to recent heavy rainfall
-    - Budget covers 80% of critical drugs but only 50% of non-critical
+    - It's late March 2026 (post-rabi harvest for rice, peak turmeric arrivals)
+    - Rice prices are recovering from Jan-Feb trough, trending up toward lean season
+    - Turmeric at Erode is near seasonal low due to heavy arrivals
+    - Agmarknet and eNAM show 5-10% price divergence on several mandis
+    - Banana prices are stable with slight festival-driven uptick
+    - Sell recommendations show real tradeoffs (nearer mandi vs farther + higher price)
     """
     rng = random.Random(SEED)
-    now = datetime(2026, 3, 29, 10, 0, 0)
+    now = datetime(2026, 3, 31, 10, 0, 0)
+    today = date(2026, 3, 31)
+    month = today.month
 
-    # -- Run optimizer once per facility (reused for facilities + procurement) --
-    facility_plans: dict = {}
-    for fac in FACILITIES:
-        facility_plans[fac.facility_id] = optimize(
-            population=fac.population_served,
-            budget_usd=fac.budget_usd_quarterly,
-            planning_months=3,
-            season="rainy",
-            supply_source="regional_depot",
-            wastage_pct=8,
-            prioritize_critical=True,
-        )
+    # ── Mandis ──
+    mandis = []
+    for m in MANDIS:
+        mandis.append({
+            "mandi_id": m.mandi_id,
+            "name": m.name,
+            "district": m.district,
+            "state": m.state,
+            "latitude": m.latitude,
+            "longitude": m.longitude,
+            "market_type": m.market_type,
+            "enam_integrated": m.enam_integrated,
+            "reporting_quality": m.reporting_quality,
+            "commodities_traded": m.commodities_traded,
+            "avg_daily_arrivals_tonnes": m.avg_daily_arrivals_tonnes,
+        })
 
-    # -- Simulate stock for text input generation --
-    stock_sim = simulate_all_facilities(FACILITIES, days_back=90, seed=SEED)
-    stock_dict = {}
-    for fid, readings in stock_sim.items():
-        stock_dict[fid] = [
-            {
-                "facility_id": r.facility_id,
-                "drug_id": r.drug_id,
-                "date": r.date,
-                "stock_level": r.stock_level,
-                "consumption_today": r.consumption_today,
-                "days_of_stock_remaining": r.days_of_stock_remaining,
-                "reported": r.reported,
-                "data_quality": r.data_quality,
-            }
-            for r in readings
-        ]
+    # ── Reconciled market prices ──
+    market_prices = []
+    reconciled_by_mandi: dict[str, dict] = {}
 
-    # -- Generate raw text inputs --
-    raw_inputs = generate_all_inputs(
-        facilities=FACILITIES,
-        stock_by_facility=stock_dict,
-        seed=SEED,
-    )
+    for m in MANDIS:
+        reconciled_by_mandi[m.mandi_id] = {}
+        for commodity in COMMODITIES:
+            cid = commodity["id"]
+            if cid not in m.commodities_traded:
+                continue
 
-    # -- Demo extracted data --
-    extracted_data = {}
-    for fac in FACILITIES:
-        fid = fac.facility_id
-        drugs_extracted = {}
-        pop_factor = fac.population_served / 1000
+            base = BASE_PRICES_RS.get(cid, 2000)
+            seasonal = SEASONAL_INDICES.get(cid, {}).get(month, 1.0)
 
-        for drug in ESSENTIAL_MEDICINES[:8]:  # top 8 drugs
-            monthly = drug["consumption_per_1000_month"] * pop_factor
-            seasonal_mult = drug["seasonal_multiplier"].get("rainy", 1.0)
-            daily = monthly * seasonal_mult / 30
-            stock = daily * rng.uniform(10, 50)
-            dos = stock / daily if daily > 0 else 999
+            mandi_factor = 1.0 + rng.uniform(-0.04, 0.06)
+            if m.market_type == "terminal":
+                mandi_factor += 0.02
+            elif m.reporting_quality == "poor":
+                mandi_factor -= 0.02
 
-            drugs_extracted[drug["drug_id"]] = {
-                "stock_level": round(stock, 0),
-                "days_of_stock": round(dos, 1),
-                "source": "stock_report",
-            }
+            price = round(base * seasonal * mandi_factor, 0)
 
-        disease_cases = {
-            "malaria": rng.randint(int(fac.population_served * 0.002), int(fac.population_served * 0.008)),
-            "diarrhoea": rng.randint(int(fac.population_served * 0.001), int(fac.population_served * 0.005)),
-            "ari": rng.randint(int(fac.population_served * 0.001), int(fac.population_served * 0.004)),
-        }
+            conf_map = {"good": rng.uniform(0.85, 0.95), "moderate": rng.uniform(0.70, 0.85), "poor": rng.uniform(0.55, 0.70)}
+            confidence = conf_map.get(m.reporting_quality, 0.7)
 
-        alerts = []
-        if fac.reporting_quality == "poor":
-            alerts.append(f"CHW-{fid}-1: ORS finished in ward {rng.randint(1,5)}. Pls resupply urgent")
+            # Generate Agmarknet/eNAM split for display
+            agm_price = round(price * rng.uniform(0.97, 1.03))
+            enam_price_val = round(price * rng.uniform(0.95, 1.05)) if m.enam_integrated else None
 
-        extracted_data[fid] = {
-            "facility_id": fid,
-            "drugs": drugs_extracted,
-            "disease_cases": disease_cases,
-            "alerts": alerts,
-        }
-
-    # -- Demo reconciliation results --
-    reconciliation_results = {}
-    for fac in FACILITIES:
-        fid = fac.facility_id
-        conflicts = []
-        stock_by_drug = {}
-        pop_factor = fac.population_served / 1000
-
-        for drug in ESSENTIAL_MEDICINES:
-            monthly = drug["consumption_per_1000_month"] * pop_factor
-            seasonal_mult = drug["seasonal_multiplier"].get("rainy", 1.0)
-            daily = monthly * seasonal_mult / 30
-
-            # ACT-20 deliberately low at certain facilities
-            if drug["drug_id"] == "ACT-20" and fid in ("FAC-AJE", "FAC-UNG", "FAC-EPE"):
-                stock = rng.uniform(2, 8) * daily
-            elif drug["drug_id"] == "ORS-1L" and fid in ("FAC-AJE", "FAC-GMA"):
-                stock = rng.uniform(5, 12) * daily
+            # Trend based on seasonal direction
+            next_month_seasonal = SEASONAL_INDICES.get(cid, {}).get(month % 12 + 1, 1.0)
+            if next_month_seasonal > seasonal * 1.02:
+                trend = "up"
+            elif next_month_seasonal < seasonal * 0.98:
+                trend = "down"
             else:
-                stock = rng.uniform(15, 60) * daily
+                trend = "flat"
 
-            dos = stock / daily if daily > 0 else 999
-
-            stock_by_drug[drug["drug_id"]] = {
-                "stock_level": round(stock, 1),
-                "consumption_daily": round(daily, 1),
-                "days_of_stock_remaining": round(dos, 1),
-                "source": "reconciled",
-            }
-
-        # Add a sample conflict for poor-reporting facilities
-        if fac.reporting_quality == "poor":
-            conflicts.append({
-                "drug_id": "ACT-20",
-                "drug_name": "Artemether-Lumefantrine (AL) 20/120mg",
-                "field": "stock_level",
-                "simulated_value": 245,
-                "extracted_value": 180,
-                "resolution": "averaged",
+            market_prices.append({
+                "mandi_id": m.mandi_id,
+                "mandi_name": m.name,
+                "commodity_id": cid,
+                "commodity_name": commodity["name"],
+                "category": commodity["category"],
+                "price_rs": price,
+                "agmarknet_price_rs": agm_price,
+                "enam_price_rs": enam_price_val,
+                "reconciled_price_rs": price,
+                "confidence": round(confidence, 2),
+                "price_trend": trend,
+                "date": today.isoformat(),
+                "source_used": "weighted_average" if m.enam_integrated else "agmarknet_only",
                 "reasoning": (
-                    "Stock report says 180 but LMIS shows 245. "
-                    "Difference is >20%. Using average (212) as reconciled value. "
-                    "Facility has poor reporting quality -- manual count recommended."
+                    f"Agmarknet and eNAM agree within 5% at {m.name}."
+                    if confidence > 0.85 else
+                    f"Minor conflict at {m.name} resolved by weighted average."
                 ),
             })
 
-        quality_score = {"good": 0.92, "moderate": 0.78, "poor": 0.55}.get(fac.reporting_quality, 0.7)
+            reconciled_by_mandi[m.mandi_id][cid] = {
+                "price_rs": price,
+                "confidence": round(confidence, 2),
+            }
 
-        reconciliation_results[fid] = {
-            "facility_id": fid,
-            "stock_by_drug": stock_by_drug,
-            "conflicts": conflicts,
-            "disease_cases": extracted_data.get(fid, {}).get("disease_cases", {}),
-            "quality_score": quality_score,
-        }
+    # ── Price conflicts ──
+    price_conflicts = []
+    for m in MANDIS:
+        if not m.enam_integrated:
+            continue
+        for commodity in COMMODITIES:
+            cid = commodity["id"]
+            if cid not in m.commodities_traded:
+                continue
+            if rng.random() > 0.35:
+                continue
 
-    # -- Demo model metrics --
-    model_metrics = {
-        "model_type": "epidemiological_formulas",
-        "model_source": "mordecai_et_al_2013",
-        "features": [
-            "avg_precip_mm", "avg_temp_c", "avg_humidity_pct",
-            "population_served", "seasonal_multiplier",
-        ],
-        "rmse": 142.3,
-        "mae": 98.7,
-        "r_squared": 0.84,
-        "feature_importances": {
-            "avg_precip_mm": 0.32,
-            "avg_temp_c": 0.25,
-            "seasonal_multiplier": 0.22,
-            "population_served": 0.15,
-            "avg_humidity_pct": 0.06,
-        },
-        "note": (
-            "Epidemiological formula model calibrated against historical disease "
-            "surveillance data. Climate features dominate for malaria and diarrhoeal "
-            "drug categories. R-squared of 0.84 across 10 facilities."
-        ),
-    }
+            base = BASE_PRICES_RS.get(cid, 2000)
+            seasonal = SEASONAL_INDICES.get(cid, {}).get(month, 1.0)
+            agm_price = round(base * seasonal * (1 + rng.uniform(-0.03, 0.03)), 0)
 
-    # -- Demo procurement reasoning --
-    procurement_reasoning = [
-        {
-            "round": 1,
-            "tool": "get_facility_stock",
-            "input": {"facility_id": "FAC-AJE"},
-            "result_summary": "15 drugs, facility=Ajeromi PHC. ACT-20 at 5 days, ORS at 8 days.",
-        },
-        {
-            "round": 1,
-            "tool": "get_facility_stock",
-            "input": {"facility_id": "FAC-UNG"},
-            "result_summary": "15 drugs, facility=Ungogo Health Post. ACT-20 at 3 days, critical.",
-        },
-        {
-            "round": 2,
-            "tool": "estimate_stockout_impact",
-            "input": {"facility_id": "FAC-UNG", "drug_id": "ACT-20", "days_without_stock": 14},
-            "result_summary": "severity=critical, deaths=0.45 estimated if 14-day stockout",
-        },
-        {
-            "round": 2,
-            "tool": "check_redistribution",
-            "input": {"source_facility_id": "FAC-KMC", "target_facility_id": "FAC-UNG", "drug_id": "ACT-20"},
-            "result_summary": "can_redistribute=True, available=2400 courses, transit 1 day (same district)",
-        },
-        {
-            "round": 3,
-            "tool": "get_demand_forecast",
-            "input": {"facility_id": "FAC-AJE", "drug_id": "ORS-1L"},
-            "result_summary": "1 forecast. Demand 1.7x baseline due to diarrhoea risk from heavy rainfall.",
-        },
-        {
-            "round": 3,
-            "tool": "get_supplier_options",
-            "input": {"drug_id": "ACT-20"},
-            "result_summary": "4 supplier options: central(7d), regional(14d), intl(45d), emergency(5d)",
-        },
-        {
-            "round": 4,
-            "tool": "check_redistribution",
-            "input": {"source_facility_id": "FAC-IKJ", "target_facility_id": "FAC-AJE", "drug_id": "ORS-1L"},
-            "result_summary": "can_redistribute=True, available=850 sachets, transit 1 day (Lagos district)",
-        },
-    ]
+            divergence = rng.uniform(0.04, 0.12)
+            enam_price = round(agm_price * (1 + divergence * (1 if rng.random() > 0.4 else -1)), 0)
 
-    # -- Demo RAG retrievals --
-    rag_retrievals = [
-        {
-            "query": "ACT stockout management protocol",
-            "chunk": "WHO recommends emergency procurement of ACTs when stock falls below 2 weeks supply...",
-            "source": "WHO Essential Medicines Guidelines 2023",
-            "relevance_score": 0.92,
-        },
-        {
-            "query": "ORS diarrhoea outbreak response",
-            "chunk": "During diarrhoea outbreaks, ORS consumption may increase 2-3x. Pre-position stocks at community level...",
-            "source": "UNICEF WASH Response Protocol",
-            "relevance_score": 0.88,
-        },
-    ]
+            delta_pct = round(abs(enam_price - agm_price) / agm_price * 100, 1)
+            reconciled_price = round(agm_price * 0.6 + enam_price * 0.4, 0)
 
-    # -- Facilities with status --
-    facilities = []
-    for fac in FACILITIES:
-        plan = facility_plans[fac.facility_id]
-        high_risk_count = sum(
-            1 for o in plan.orders if o.stockout_risk in ("high", "critical")
+            # Generate rich investigation reasoning showing the 5 reconciliation tools
+            neighbor_price = round(agm_price * rng.uniform(0.97, 1.03))
+            seasonal_low = round(base * min(SEASONAL_INDICES.get(cid, {}).values()))
+            seasonal_high = round(base * max(SEASONAL_INDICES.get(cid, {}).values()))
+            arrivals = round(rng.uniform(30, 200), 1)
+
+            investigation_steps = [
+                {
+                    "tool": "compare_sources",
+                    "finding": f"Agmarknet reports Rs {agm_price:,.0f}, eNAM reports Rs {enam_price:,.0f} ({delta_pct}% divergence). Agmarknet updated {rng.randint(2,8)}h ago, eNAM {rng.randint(1,4)}h ago.",
+                },
+                {
+                    "tool": "check_neighboring_mandis",
+                    "finding": f"Nearest mandi reports Rs {neighbor_price:,.0f} for {commodity['name']} — {'consistent with Agmarknet' if abs(neighbor_price - agm_price) < abs(neighbor_price - enam_price) else 'closer to eNAM price'}.",
+                },
+                {
+                    "tool": "seasonal_norm_check",
+                    "finding": f"Seasonal range for {commodity['name']} in {'March' if month == 3 else 'April'}: Rs {seasonal_low:,.0f}–{seasonal_high:,.0f}. Both prices are within plausible range.",
+                },
+                {
+                    "tool": "verify_arrival_volumes",
+                    "finding": f"Arrivals at {m.name}: {arrivals} tonnes. {'High arrivals support lower price' if enam_price < agm_price else 'Moderate arrivals — no strong supply signal'}.",
+                },
+                {
+                    "tool": "transport_arbitrage_check",
+                    "finding": f"Spread of Rs {abs(agm_price - enam_price):,.0f} {'exceeds' if delta_pct > 8 else 'is within'} transport cost to neighboring mandis (~Rs {round(rng.uniform(80, 200)):,.0f}/quintal). {'Suspicious — markets should equilibrate.' if delta_pct > 8 else 'Within normal range.'}",
+                },
+            ]
+
+            # Decision logic based on investigation
+            if abs(neighbor_price - agm_price) < abs(neighbor_price - enam_price):
+                trust = "Agmarknet"
+                reconciled_price = round(agm_price * 0.65 + enam_price * 0.35)
+                resolution_detail = f"Neighbor prices align with Agmarknet. Weighted 65/35 toward Agmarknet = Rs {reconciled_price:,.0f}."
+            else:
+                trust = "eNAM"
+                reconciled_price = round(agm_price * 0.4 + enam_price * 0.6)
+                resolution_detail = f"Neighbor prices align with eNAM. Weighted 40/60 toward eNAM = Rs {reconciled_price:,.0f}."
+
+            price_conflicts.append({
+                "mandi_id": m.mandi_id,
+                "mandi_name": m.name,
+                "commodity_id": cid,
+                "commodity_name": commodity["name"],
+                "agmarknet_price": agm_price,
+                "enam_price": enam_price,
+                "delta_pct": delta_pct,
+                "resolution": f"weighted_toward_{trust.lower()}",
+                "reconciled_price": reconciled_price,
+                "investigation_steps": investigation_steps,
+                "reasoning": resolution_detail,
+            })
+
+    # ── Price forecasts ──
+    price_forecasts = []
+    forecast_by_mandi: dict[str, dict] = {}
+
+    for m in MANDIS:
+        forecast_by_mandi[m.mandi_id] = {}
+        for commodity in COMMODITIES:
+            cid = commodity["id"]
+            if cid not in m.commodities_traded:
+                continue
+
+            current = reconciled_by_mandi.get(m.mandi_id, {}).get(cid, {}).get("price_rs", 0)
+            if current <= 0:
+                continue
+
+            s7 = SEASONAL_INDICES.get(cid, {}).get((today + timedelta(days=7)).month, 1.0)
+            s14 = SEASONAL_INDICES.get(cid, {}).get((today + timedelta(days=14)).month, 1.0)
+            s30 = SEASONAL_INDICES.get(cid, {}).get((today + timedelta(days=30)).month, 1.0)
+            s_now = SEASONAL_INDICES.get(cid, {}).get(month, 1.0)
+
+            p7 = round(current * s7 / max(0.5, s_now) * (1 + rng.gauss(0, 0.01)), 0)
+            p14 = round(current * s14 / max(0.5, s_now) * (1 + rng.gauss(0, 0.015)), 0)
+            p30 = round(current * s30 / max(0.5, s_now) * (1 + rng.gauss(0, 0.02)), 0)
+
+            vol = rng.uniform(0.04, 0.10)
+            ci7 = round(current * vol * 0.5, 0)
+            ci14 = round(current * vol * 0.7, 0)
+            ci30 = round(current * vol * 1.0, 0)
+
+            pct_change = (p7 - current) / current if current else 0
+            direction = "up" if pct_change > 0.02 else "down" if pct_change < -0.02 else "flat"
+
+            price_forecasts.append({
+                "mandi_id": m.mandi_id,
+                "mandi_name": m.name,
+                "commodity_id": cid,
+                "commodity_name": commodity["name"],
+                "current_price_rs": current,
+                "price_7d": p7,
+                "price_14d": p14,
+                "price_30d": p30,
+                "ci_lower_7d": p7 - ci7,
+                "ci_upper_7d": p7 + ci7,
+                "ci_lower_14d": p14 - ci14,
+                "ci_upper_14d": p14 + ci14,
+                "ci_lower_30d": p30 - ci30,
+                "ci_upper_30d": p30 + ci30,
+                "direction": direction,
+                "confidence": round(rng.uniform(0.65, 0.88), 2),
+            })
+
+            forecast_by_mandi[m.mandi_id][cid] = {
+                "price_7d": p7,
+                "price_14d": p14,
+                "price_30d": p30,
+            }
+
+    # ── Sell recommendations ──
+    sell_recommendations = []
+    for farmer in SAMPLE_FARMERS:
+        commodity = COMMODITY_MAP.get(farmer.primary_commodity, {})
+        options = []
+
+        for m in MANDIS:
+            if farmer.primary_commodity not in m.commodities_traded:
+                continue
+            dist = haversine_km(farmer.latitude, farmer.longitude, m.latitude, m.longitude)
+            if dist > 60:
+                continue
+
+            transport = max(MIN_TRANSPORT_COST_RS, dist * TRANSPORT_COST_RS_PER_QUINTAL_PER_KM)
+            current_price = reconciled_by_mandi.get(m.mandi_id, {}).get(farmer.primary_commodity, {}).get("price_rs", 0)
+            if current_price <= 0:
+                continue
+
+            mandi_fee = current_price * MANDI_FEE_PCT / 100
+            net_now = current_price - transport - mandi_fee
+
+            options.append({
+                "mandi_id": m.mandi_id,
+                "mandi_name": m.name,
+                "sell_timing": "now",
+                "market_price_rs": current_price,
+                "transport_cost_rs": round(transport, 0),
+                "storage_loss_rs": 0,
+                "mandi_fee_rs": round(mandi_fee, 0),
+                "net_price_rs": round(net_now, 0),
+                "distance_km": round(dist, 1),
+                "confidence": 0.85,
+                "price_source": "current",
+            })
+
+            fc = forecast_by_mandi.get(m.mandi_id, {}).get(farmer.primary_commodity, {})
+            p7 = fc.get("price_7d", 0)
+            if p7 > 0:
+                loss_pct = POST_HARVEST_LOSS.get(farmer.primary_commodity, {}).get("storage_per_month", 2.5)
+                storage_loss = p7 * (loss_pct / 100) * (7 / 30)
+                net_7d = p7 - transport - p7 * MANDI_FEE_PCT / 100 - storage_loss
+                options.append({
+                    "mandi_id": m.mandi_id,
+                    "mandi_name": m.name,
+                    "sell_timing": "7d",
+                    "market_price_rs": p7,
+                    "transport_cost_rs": round(transport, 0),
+                    "storage_loss_rs": round(storage_loss, 0),
+                    "mandi_fee_rs": round(p7 * MANDI_FEE_PCT / 100, 0),
+                    "net_price_rs": round(net_7d, 0),
+                    "distance_km": round(dist, 1),
+                    "confidence": 0.78,
+                    "price_source": "forecasted",
+                })
+
+        options.sort(key=lambda o: o["net_price_rs"], reverse=True)
+        best = options[0] if options else {}
+
+        nearest_now = sorted(
+            [o for o in options if o.get("sell_timing") == "now"],
+            key=lambda o: o.get("distance_km", 999),
         )
+        nearest_now_price = nearest_now[0]["net_price_rs"] if nearest_now else 0
+        potential_gain = (best.get("net_price_rs", 0) - nearest_now_price) * farmer.quantity_quintals
 
-        # Data quality score based on reporting quality
-        quality_scores = {"good": rng.uniform(0.88, 0.96), "moderate": rng.uniform(0.65, 0.82), "poor": rng.uniform(0.35, 0.55)}
-        dq = quality_scores.get(fac.reporting_quality, 0.7)
-
-        facilities.append({
-            "facility_id": fac.facility_id,
-            "name": fac.name,
-            "district": fac.district,
-            "country": fac.country,
-            "latitude": fac.latitude,
-            "longitude": fac.longitude,
-            "facility_type": fac.facility_type,
-            "population_served": fac.population_served,
-            "reporting_quality": fac.reporting_quality,
-            "data_quality_score": round(dq, 2),
-            "budget_usd": fac.budget_usd_quarterly,
-            "budget_used_usd": plan.budget_used_usd,
-            "stockout_risks": high_risk_count,
-            "last_updated": now.isoformat(),
+        sell_recommendations.append({
+            "commodity_id": farmer.primary_commodity,
+            "commodity_name": commodity.get("name", ""),
+            "quantity_quintals": farmer.quantity_quintals,
+            "farmer_id": farmer.farmer_id,
+            "farmer_name": farmer.name,
+            "farmer_lat": farmer.latitude,
+            "farmer_lon": farmer.longitude,
+            "best_option": best,
+            "all_options": options[:12],
+            "potential_gain_rs": round(potential_gain, 0),
+            "recommendation_text": (
+                f"{farmer.name}: Best option is {best.get('mandi_name', 'N/A')} "
+                f"({best.get('sell_timing', 'now')}). "
+                f"Net Rs {best.get('net_price_rs', 0):,.0f}/quintal "
+                f"after transport Rs {best.get('transport_cost_rs', 0):,.0f} and fees."
+            ) if best else "No mandis in range.",
+            "recommendation_tamil": (
+                f"{farmer.name}: சிறந்த விருப்பம் {best.get('mandi_name', 'N/A')} "
+                f"({best.get('sell_timing', 'இப்போது')}). "
+                f"நிகர ₹{best.get('net_price_rs', 0):,.0f}/குவிண்டால் "
+                f"போக்குவரத்து ₹{best.get('transport_cost_rs', 0):,.0f} கழித்த பிறகு."
+            ) if best else "சந்தைகள் எதுவும் இல்லை.",
+            "credit_readiness": _demo_credit_readiness(farmer, best, options, potential_gain),
         })
 
-    # -- Stock levels (latest per drug x facility) --
-    stock_levels = []
-    for fac in FACILITIES:
-        pop_factor = fac.population_served / 1000
-        for drug in ESSENTIAL_MEDICINES:
-            monthly_consumption = drug["consumption_per_1000_month"] * pop_factor
-            seasonal_mult = drug["seasonal_multiplier"].get("rainy", 1.0)
-            daily_consumption = monthly_consumption * seasonal_mult / 30
+    # ── Raw inputs (summary) ──
+    raw_inputs = {
+        "agmarknet": {
+            "mandis_queried": len(MANDIS),
+            "records_fetched": rng.randint(800, 1200),
+            "date_range": f"{(today - timedelta(days=30)).isoformat()} to {today.isoformat()}",
+        },
+        "enam": {
+            "mandis_queried": sum(1 for m in MANDIS if m.enam_integrated),
+            "records_fetched": rng.randint(200, 400),
+            "date_range": f"{(today - timedelta(days=14)).isoformat()} to {today.isoformat()}",
+        },
+        "nasa_power": {
+            "mandis_queried": len(MANDIS),
+            "readings_fetched": rng.randint(900, 1350),
+            "parameters": ["PRECTOTCORR", "T2M", "T2M_MAX", "T2M_MIN", "RH2M"],
+        },
+    }
 
-            # Simulate current stock level
-            # ACT-20 deliberately low at several facilities
-            if drug["drug_id"] == "ACT-20" and fac.facility_id in ("FAC-AJE", "FAC-UNG", "FAC-EPE"):
-                stock = rng.uniform(2, 8) * daily_consumption  # 2-8 days
-            elif drug["drug_id"] == "ORS-1L" and fac.facility_id in ("FAC-AJE", "FAC-GMA"):
-                stock = rng.uniform(5, 12) * daily_consumption  # spiking demand
-            elif drug["storage"] == "cold_chain" and not fac.has_cold_chain:
-                stock = rng.uniform(0, 3) * daily_consumption
-            else:
-                stock = rng.uniform(15, 60) * daily_consumption
+    # ── Extracted data ──
+    extracted_data = {}
+    for m in MANDIS:
+        extracted_data[m.mandi_id] = {
+            "mandi_id": m.mandi_id,
+            "normalized_count": rng.randint(30, 60),
+            "stale_count": rng.randint(0, 5) if m.reporting_quality != "good" else 0,
+            "anomaly_count": rng.randint(0, 2),
+            "confidence": {"good": 0.92, "moderate": 0.78, "poor": 0.60}.get(m.reporting_quality, 0.7),
+            "method": "rule_based",
+        }
 
-            dos = stock / daily_consumption if daily_consumption > 0 else 999
+    # ── Reconciliation results ──
+    reconciliation_results = {}
+    for m in MANDIS:
+        reconciliation_results[m.mandi_id] = reconciled_by_mandi.get(m.mandi_id, {})
 
-            if dos < 7:
-                risk = "critical"
-            elif dos < 14:
-                risk = "high"
-            elif dos < 30:
-                risk = "moderate"
-            else:
-                risk = "low"
+    # ── Model metrics ──
+    model_metrics = {
+        "model_type": "xgboost",
+        "metrics": {
+            "rmse": 87.4,
+            "mae": 62.1,
+            "r_squared": 0.89,
+            "train_samples": 4200,
+            "features": 15,
+        },
+        "features": [
+            "current_reconciled_price", "price_trend_7d", "seasonal_index",
+            "mandi_arrival_volume_7d_avg", "rainfall_7d", "days_since_harvest",
+        ],
+        "feature_importances": {
+            "current_reconciled_price": 0.28,
+            "seasonal_index": 0.18,
+            "price_trend_7d": 0.14,
+            "mandi_arrival_volume_7d_avg": 0.12,
+            "rainfall_7d": 0.08,
+            "days_since_harvest": 0.07,
+            "price_volatility_30d": 0.05,
+            "temperature_7d_avg": 0.04,
+            "month_sin": 0.02,
+            "month_cos": 0.02,
+        },
+    }
 
-            stock_levels.append({
-                "facility_id": fac.facility_id,
-                "facility_name": fac.name,
-                "drug_id": drug["drug_id"],
-                "drug_name": drug["name"],
-                "category": drug["category"],
-                "critical": drug["critical"],
-                "stock_level": round(stock, 0),
-                "consumption_daily": round(daily_consumption, 1),
-                "days_of_stock": round(dos, 1),
-                "stockout_risk": risk,
-                "date": now.strftime("%Y-%m-%d"),
-            })
-
-    # -- Demand forecasts --
-    demand_forecasts = []
-    for fac in FACILITIES:
-        pop_factor = fac.population_served / 1000
-        # Simulate climate conditions: rainy season
-        avg_precip = rng.uniform(6, 14)  # mm/day
-        avg_temp = rng.uniform(24, 29)
-
-        for drug in ESSENTIAL_MEDICINES:
-            base_monthly = drug["consumption_per_1000_month"] * pop_factor
-            category = drug["category"]
-
-            if category in ("Antimalarials", "Diagnostics"):
-                # Malaria temp suitability
-                temp_suit = max(0, -0.015 * (avg_temp - 25) ** 2 + 1.0)
-                rain_risk = min(1.8, avg_precip / 8)
-                multiplier = max(0.3, temp_suit * rain_risk)
-                climate_driven = True
-                risk_level = "high" if multiplier > 1.2 else "moderate" if multiplier > 0.8 else "low"
-                factors = [{
-                    "factor": "malaria_risk",
-                    "temp_suitability": round(temp_suit, 2),
-                    "rainfall_risk": round(rain_risk, 2),
-                    "combined": round(multiplier, 2),
-                    "avg_temp_c": round(avg_temp, 1),
-                    "avg_precip_mm": round(avg_precip, 1),
-                }]
-            elif category == "Diarrhoeal":
-                multiplier = 1.4 + rng.uniform(0, 0.5)
-                climate_driven = True
-                risk_level = "high"
-                factors = [{
-                    "factor": "diarrhoea_risk",
-                    "rainfall_flooding": round(avg_precip, 1),
-                    "combined": round(multiplier, 2),
-                }]
-            elif category == "Antibiotics":
-                multiplier = 1.1 + rng.uniform(0, 0.25)
-                climate_driven = True
-                risk_level = "moderate"
-                factors = [{"factor": "respiratory_risk", "combined": round(multiplier, 2)}]
-            else:
-                multiplier = 1.0
-                climate_driven = False
-                risk_level = "low"
-                factors = [{"factor": "baseline", "note": "No climate-disease correlation"}]
-
-            predicted = round(base_monthly * multiplier, 0)
-            baseline = round(base_monthly, 0)
-
-            demand_forecasts.append({
-                "facility_id": fac.facility_id,
-                "facility_name": fac.name,
-                "drug_id": drug["drug_id"],
-                "drug_name": drug["name"],
-                "category": category,
-                "predicted_demand_monthly": predicted,
-                "baseline_demand_monthly": baseline,
-                "demand_multiplier": round(multiplier, 2),
-                "confidence": round(rng.uniform(0.7, 0.95), 2),
-                "contributing_factors": factors,
-                "climate_driven": climate_driven,
-                "risk_level": risk_level,
-                # New fields
-                "model_source": "epidemiological_formulas",
-                "prediction_interval": {
-                    "lower": round(predicted * 0.8, 0),
-                    "upper": round(predicted * 1.25, 0),
-                },
-                "model_metrics": {
-                    "rmse": 142.3,
-                    "r_squared": 0.84,
-                },
-            })
-
-    # -- Procurement plans (reuse cached optimizer results) --
-    procurement_plans = []
-    for fac in FACILITIES:
-        plan = facility_plans[fac.facility_id]
-        plan_dict = plan_to_dict(plan)
-        plan_dict["facility_id"] = fac.facility_id
-        plan_dict["facility_name"] = fac.name
-
-        # Add agent reasoning
-        critical_covered = plan.critical_drugs_covered
-        critical_total = plan.critical_drugs_total
-        if critical_covered == critical_total:
-            reasoning = (
-                f"Budget of ${fac.budget_usd_quarterly:,.0f} fully covers all "
-                f"{critical_total} critical drugs. "
-            )
-        else:
-            reasoning = (
-                f"Budget of ${fac.budget_usd_quarterly:,.0f} covers {critical_covered}/"
-                f"{critical_total} critical drugs. "
-            )
-
-        if plan.stockout_risks > 0:
-            reasoning += (
-                f"{plan.stockout_risks} drugs at high/critical stockout risk. "
-                "Recommend emergency procurement or reallocation from other facilities."
-            )
-        else:
-            reasoning += "All drugs adequately stocked for the planning period."
-
-        plan_dict["agent_reasoning"] = reasoning
-
-        # New fields
-        plan_dict["optimization_method"] = "greedy_fallback"
-        plan_dict["reasoning_trace"] = procurement_reasoning
-        plan_dict["redistributions"] = [
-            r for r in [
-                {
-                    "from_facility": "FAC-KMC",
-                    "to_facility": "FAC-UNG",
-                    "drug_id": "ACT-20",
-                    "quantity": 500,
-                    "transit_days": 1,
-                    "reason": "Murtala Muhammad has 2400 surplus ACT courses after safety buffer",
-                },
-                {
-                    "from_facility": "FAC-IKJ",
-                    "to_facility": "FAC-AJE",
-                    "drug_id": "ORS-1L",
-                    "quantity": 850,
-                    "transit_days": 1,
-                    "reason": "Ikeja General has surplus ORS; Ajeromi has diarrhoea spike",
-                },
-            ] if fac.facility_id in (r.get("to_facility"), r.get("from_facility"))
-        ]
-
-        procurement_plans.append(plan_dict)
-
-    # -- Stockout risks --
-    stockout_risks = [
-        sl for sl in stock_levels
-        if sl["stockout_risk"] in ("high", "critical", "moderate")
+    # ── Recommendation reasoning ──
+    recommendation_reasoning = [
+        {
+            "farmer_id": "FMR-LKSH",
+            "farmer_name": "Lakshmi",
+            "tool": "get_market_summary",
+            "input": {"commodity_id": "RICE-SAMBA"},
+            "result_summary": "Rice prices across 8 mandis: Rs 1,980-2,250. Thanjavur lowest (production hub).",
+        },
+        {
+            "farmer_id": "FMR-LKSH",
+            "farmer_name": "Lakshmi",
+            "tool": "get_price_forecast",
+            "input": {"commodity_id": "RICE-SAMBA", "mandi_id": "MND-KBK"},
+            "result_summary": "Kumbakonam: +3.5% in 7d (seasonal uptick), +6% in 30d. Confidence: 0.82.",
+        },
+        {
+            "farmer_id": "FMR-KUMR",
+            "farmer_name": "Kumar",
+            "tool": "get_storage_analysis",
+            "input": {"commodity_id": "TUR-FIN", "current_price_rs": 10800},
+            "result_summary": "Turmeric stores well: 1.5%/month loss. Hold 2 months = 3% loss vs 15-25% price gain.",
+        },
+        {
+            "farmer_id": "FMR-MEEN",
+            "farmer_name": "Meena",
+            "tool": "get_weather_outlook",
+            "input": {"latitude": 10.36, "longitude": 77.97},
+            "result_summary": "Light rain day 3-4. Banana must sell within 5 days. Transport risky on day 3.",
+        },
     ]
-    stockout_risks.sort(key=lambda x: (
-        {"critical": 0, "high": 1, "moderate": 2}.get(x["stockout_risk"], 3),
-        0 if x.get("critical") else 1,
-    ))
 
-    # -- Pipeline runs (historical) --
+    # ── Pipeline runs ──
     pipeline_runs = []
-    for i in range(15):
+    for i in range(12):
         run_date = now - timedelta(days=i * 2)
-        duration = rng.uniform(40, 150)
-        cost = rng.uniform(0.04, 0.15)
-        status = "ok" if rng.random() > 0.12 else "partial"
+        duration = rng.uniform(15, 60)
+        cost = rng.uniform(0.02, 0.08)
+        status = "ok" if rng.random() > 0.1 else "partial"
         pipeline_runs.append({
-            "run_id": f"run-{2000 + i}",
+            "run_id": f"run-{3000 + i}",
             "started_at": run_date.isoformat(),
             "ended_at": (run_date + timedelta(seconds=duration)).isoformat(),
             "status": status,
             "duration_s": round(duration, 1),
-            "facilities_processed": len(FACILITIES),
-            "drugs_tracked": len(ESSENTIAL_MEDICINES),
-            "stockout_risks_found": rng.randint(3, 12),
+            "mandis_processed": len(MANDIS),
+            "commodities_tracked": len(COMMODITIES),
+            "price_conflicts_found": rng.randint(3, 12),
             "total_cost_usd": round(cost, 4),
             "steps": [
                 {"step": s, "status": "ok", "duration_s": round(duration / 6, 1)}
@@ -547,45 +561,37 @@ def _generate_demo_data() -> dict:
             ],
         })
 
-    # -- Stats --
+    # ── Stats ──
     stats = {
         "total_runs": len(pipeline_runs),
         "successful_runs": sum(1 for r in pipeline_runs if r["status"] == "ok"),
         "success_rate": round(
             sum(1 for r in pipeline_runs if r["status"] == "ok") / len(pipeline_runs), 2,
         ),
-        "facilities_monitored": len(FACILITIES),
-        "drugs_tracked": len(ESSENTIAL_MEDICINES),
-        "high_risk_stockouts": sum(
-            1 for sl in stock_levels if sl["stockout_risk"] in ("high", "critical")
-        ),
+        "mandis_monitored": len(MANDIS),
+        "commodities_tracked": len(COMMODITIES),
+        "price_conflicts_found": len(price_conflicts),
         "total_cost_usd": round(sum(r["total_cost_usd"] for r in pipeline_runs), 2),
         "avg_cost_per_run_usd": round(
             sum(r["total_cost_usd"] for r in pipeline_runs) / len(pipeline_runs), 4,
         ),
         "last_run": pipeline_runs[0]["started_at"],
-        "data_sources": ["NASA POWER", "LMIS (simulated)"],
-        # New token tracking
-        "extraction_tokens": 0,
-        "reconciliation_tokens": 0,
-        "optimization_tokens": 0,
+        "data_sources": ["Agmarknet (data.gov.in)", "eNAM", "NASA POWER"],
     }
 
     return {
-        "facilities": facilities,
-        "stock_levels": stock_levels,
-        "demand_forecasts": demand_forecasts,
-        "procurement_plans": procurement_plans,
-        "stockout_risks": stockout_risks,
+        "mandis": mandis,
+        "market_prices": market_prices,
+        "price_forecasts": price_forecasts,
+        "sell_recommendations": sell_recommendations,
+        "price_conflicts": price_conflicts,
         "pipeline_runs": pipeline_runs,
         "stats": stats,
-        # New demo data
         "raw_inputs": raw_inputs,
         "extracted_data": extracted_data,
         "reconciliation_results": reconciliation_results,
         "model_metrics": model_metrics,
-        "procurement_reasoning": procurement_reasoning,
-        "rag_retrievals": rag_retrievals,
+        "recommendation_reasoning": recommendation_reasoning,
     }
 
 
@@ -602,12 +608,7 @@ def _get_demo() -> dict:
     return _demo_cache
 
 
-# ---------------------------------------------------------------------------
-# Helper: get from store or demo
-# ---------------------------------------------------------------------------
-
 def _get(key: str, default=None):
-    """Return store data if pipeline has run, otherwise demo data."""
     if default is None:
         default = []
     if store.has_real_data:
@@ -621,359 +622,176 @@ def _source() -> str:
     return "pipeline" if store.has_real_data else "demo"
 
 
-# ---------------------------------------------------------------------------
-# API Endpoints
-# ---------------------------------------------------------------------------
+# ── API Endpoints ────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "service": "health-supply-chain-optimizer",
-        "version": "2.0.0",
+        "service": "market-intelligence-agent",
+        "version": "1.0.0",
         "pipeline_data": store.has_real_data,
     }
 
 
-@app.get("/api/facilities")
-def get_facilities():
-    """Facility list with current stock status."""
-    facilities = _get("facilities")
-    return {
-        "facilities": facilities,
-        "total": len(facilities),
-        "countries": sorted(set(f["country"] for f in facilities)),
-        "source": _source(),
-    }
+@app.get("/api/mandis")
+def get_mandis():
+    mandis = _get("mandis")
+    return {"mandis": mandis, "total": len(mandis), "source": _source()}
 
 
-@app.get("/api/stock-levels")
-def get_stock_levels(
-    facility_id: str | None = Query(default=None),
-    drug_id: str | None = Query(default=None),
-    risk_only: bool = Query(default=False),
+@app.get("/api/market-prices")
+def get_market_prices(
+    mandi_id: str | None = Query(default=None),
+    commodity_id: str | None = Query(default=None),
 ):
-    """Stock by drug x facility with stockout risk."""
-    levels = _get("stock_levels")
-
-    if facility_id:
-        levels = [sl for sl in levels if sl["facility_id"] == facility_id]
-    if drug_id:
-        levels = [sl for sl in levels if sl["drug_id"] == drug_id]
-    if risk_only:
-        levels = [sl for sl in levels if sl.get("stockout_risk") in ("high", "critical")]
-
-    return {
-        "stock_levels": levels,
-        "total": len(levels),
-        "source": _source(),
-    }
+    prices = _get("market_prices")
+    if mandi_id:
+        prices = [p for p in prices if p.get("mandi_id") == mandi_id]
+    if commodity_id:
+        prices = [p for p in prices if p.get("commodity_id") == commodity_id]
+    return {"market_prices": prices, "total": len(prices), "source": _source()}
 
 
-@app.get("/api/demand-forecast")
-def get_demand_forecast(
-    facility_id: str | None = Query(default=None),
-    drug_id: str | None = Query(default=None),
-    climate_driven_only: bool = Query(default=False),
+@app.get("/api/price-forecast")
+def get_price_forecast(
+    mandi_id: str | None = Query(default=None),
+    commodity_id: str | None = Query(default=None),
 ):
-    """Predicted demand with climate factors, model source, and prediction intervals."""
-    forecasts = _get("demand_forecasts")
-
-    if facility_id:
-        forecasts = [f for f in forecasts if f["facility_id"] == facility_id]
-    if drug_id:
-        forecasts = [f for f in forecasts if f["drug_id"] == drug_id]
-    if climate_driven_only:
-        forecasts = [f for f in forecasts if f.get("climate_driven")]
-
-    return {
-        "forecasts": forecasts,
-        "total": len(forecasts),
-        "source": _source(),
-    }
+    forecasts = _get("price_forecasts")
+    if mandi_id:
+        forecasts = [f for f in forecasts if f.get("mandi_id") == mandi_id]
+    if commodity_id:
+        forecasts = [f for f in forecasts if f.get("commodity_id") == commodity_id]
+    return {"price_forecasts": forecasts, "total": len(forecasts), "source": _source()}
 
 
-@app.get("/api/procurement-plan")
-def get_procurement_plan(
-    facility_id: str | None = Query(default=None),
+@app.get("/api/sell-recommendations")
+def get_sell_recommendations(farmer_id: str | None = Query(default=None)):
+    recs = _get("sell_recommendations")
+    if farmer_id:
+        recs = [r for r in recs if r.get("farmer_id") == farmer_id]
+    return {"sell_recommendations": recs, "total": len(recs), "source": _source()}
+
+
+@app.get("/api/price-conflicts")
+def get_price_conflicts(
+    mandi_id: str | None = Query(default=None),
+    commodity_id: str | None = Query(default=None),
 ):
-    """Optimized procurement plan with per-drug orders, agent reasoning, and redistributions."""
-    plans = _get("procurement_plans")
+    conflicts = _get("price_conflicts")
+    if mandi_id:
+        conflicts = [c for c in conflicts if c.get("mandi_id") == mandi_id]
+    if commodity_id:
+        conflicts = [c for c in conflicts if c.get("commodity_id") == commodity_id]
+    return {"price_conflicts": conflicts, "total": len(conflicts), "source": _source()}
 
-    if facility_id:
-        plans = [p for p in plans if p.get("facility_id") == facility_id]
-
-    return {
-        "plans": plans,
-        "total": len(plans),
-        "source": _source(),
-    }
-
-
-@app.get("/api/stockout-risks")
-def get_stockout_risks(
-    risk_level: str | None = Query(default=None),
-    critical_only: bool = Query(default=False),
-):
-    """Drugs/facilities at risk of stockout."""
-    risks = _get("stockout_risks")
-
-    if risk_level:
-        risks = [r for r in risks if r.get("stockout_risk", r.get("risk_level")) == risk_level]
-    if critical_only:
-        risks = [r for r in risks if r.get("critical")]
-
-    high = sum(1 for r in risks if r.get("stockout_risk", r.get("risk_level")) == "high")
-    critical = sum(1 for r in risks if r.get("stockout_risk", r.get("risk_level")) == "critical")
-
-    return {
-        "risks": risks,
-        "total": len(risks),
-        "high": high,
-        "critical": critical,
-        "source": _source(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# New endpoints
-# ---------------------------------------------------------------------------
 
 @app.get("/api/raw-inputs")
-def get_raw_inputs(
-    facility_id: str | None = Query(default=None),
-):
-    """Raw unstructured text: stock reports, IDSR, CHW messages."""
-    inputs = _get("raw_inputs")
-
-    if facility_id:
-        if isinstance(inputs, dict):
-            fac_input = inputs.get(facility_id)
-            if fac_input:
-                inputs = {facility_id: fac_input}
-            else:
-                inputs = {}
-
-    return {
-        "raw_inputs": inputs,
-        "total_facilities": len(inputs) if isinstance(inputs, dict) else 0,
-        "source": _source(),
-    }
+def get_raw_inputs():
+    return {"raw_inputs": _get("raw_inputs", default={}), "source": _source()}
 
 
 @app.get("/api/extracted-data")
-def get_extracted_data(
-    facility_id: str | None = Query(default=None),
-):
-    """What Claude extracted from each input."""
-    data = _get("extracted_data")
-
-    if facility_id:
-        if isinstance(data, dict):
-            fac_data = data.get(facility_id)
-            if fac_data:
-                data = {facility_id: fac_data}
-            else:
-                data = {}
-
-    return {
-        "extracted_data": data,
-        "total_facilities": len(data) if isinstance(data, dict) else 0,
-        "source": _source(),
-    }
+def get_extracted_data(mandi_id: str | None = Query(default=None)):
+    data = _get("extracted_data", default={})
+    if mandi_id and isinstance(data, dict):
+        fac_data = data.get(mandi_id)
+        data = {mandi_id: fac_data} if fac_data else {}
+    return {"extracted_data": data, "total_mandis": len(data) if isinstance(data, dict) else 0, "source": _source()}
 
 
 @app.get("/api/reconciled-data")
-def get_reconciled_data(
-    facility_id: str | None = Query(default=None),
-):
-    """Reconciled data with conflict resolution reasoning."""
-    data = _get("reconciliation_results")
-
-    if facility_id:
-        if isinstance(data, dict):
-            fac_data = data.get(facility_id)
-            if fac_data:
-                data = {facility_id: fac_data}
-            else:
-                data = {}
-
-    # Compute total conflicts
-    total_conflicts = 0
-    if isinstance(data, dict):
-        for v in data.values():
-            if isinstance(v, dict):
-                total_conflicts += len(v.get("conflicts", []))
-
-    return {
-        "reconciled_data": data,
-        "total_facilities": len(data) if isinstance(data, dict) else 0,
-        "total_conflicts": total_conflicts,
-        "source": _source(),
-    }
+def get_reconciled_data(mandi_id: str | None = Query(default=None)):
+    data = _get("reconciliation_results", default={})
+    if mandi_id and isinstance(data, dict):
+        fac_data = data.get(mandi_id)
+        data = {mandi_id: fac_data} if fac_data else {}
+    return {"reconciled_data": data, "total_mandis": len(data) if isinstance(data, dict) else 0, "source": _source()}
 
 
 @app.get("/api/model-info")
 def get_model_info():
-    """ML stack: XGBoost demand model, residual correction, anomaly detection, RAG."""
     model_metrics = _get("model_metrics", default={})
-
-    # Add info about all ML components
     ml_stack = {
         "primary_model": {
-            "type": "XGBoost Regressor (200 estimators, quantile regression)",
-            "features": 20,
-            "training_samples": model_metrics.get("primary_model", {}).get("train_samples"),
-            "metrics": model_metrics.get("primary_model", {}),
-        },
-        "residual_correction": {
-            "type": "XGBoost MOS-style residual correction (150 estimators)",
-            "purpose": "Corrects systematic biases in primary model predictions",
-            "metrics": model_metrics.get("residual_model", {}),
-        },
-        "chronos_bolt": model_metrics.get("chronos_model",
-            ChronosBoltForecaster().model_info),
-        "anomaly_detection": {
-            "type": "Isolation Forest (200 estimators)",
-            "purpose": "Flags anomalous consumption patterns for investigation",
+            "type": "XGBoost Regressor (200 estimators, 3 horizons: 7d/14d/30d)",
+            "features": 15,
+            "metrics": model_metrics.get("metrics", {}),
         },
         "rag": {
             "type": "Hybrid FAISS + BM25 with sentence-transformers (all-MiniLM-L6-v2)",
-            "purpose": "Retrieval-augmented generation for clinical knowledge",
+            "purpose": "Agricultural marketing knowledge retrieval for recommendations",
+            "chunks": 28,
         },
         "agents": {
             "extraction": "Claude tool-use agent (5 tools) with regex fallback",
-            "reconciliation": "Claude cross-validation agent (5 tools)",
-            "procurement": "Claude multi-facility optimization agent (5 tools)",
+            "reconciliation": "Claude cross-validation agent (5 tools) with rule-based fallback",
+            "recommendation": "Claude broker agent (5 tools) with template fallback",
         },
     }
+    return {"model_metrics": model_metrics, "ml_stack": ml_stack, "source": _source()}
 
-    return {
-        "model_metrics": model_metrics,
-        "ml_stack": ml_stack,
-        "source": _source(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Existing endpoints (kept + enhanced)
-# ---------------------------------------------------------------------------
 
 @app.get("/api/pipeline/runs")
 def get_pipeline_runs():
-    """Run history."""
     runs = _get("pipeline_runs")
     return {"runs": runs, "total": len(runs)}
 
 
 @app.get("/api/pipeline/stats")
 def get_pipeline_stats():
-    """Aggregate pipeline stats with per-step token usage."""
-    stats = _get("stats", default={})
-    return stats
+    return _get("stats", default={})
 
 
 @app.post("/api/pipeline/trigger")
 def trigger_pipeline():
-    """Trigger a manual pipeline run."""
-    result = scheduler.trigger()
-    return result
+    return scheduler.trigger()
 
 
 @app.get("/api/db/health")
 def db_health():
-    """Database connectivity check."""
     from src.db import health_check
     return health_check()
 
 
-# -- Legacy endpoints (kept for backward compatibility) --
-
-@app.get("/api/drugs")
-def list_drugs():
-    """List all available drugs with metadata."""
-    return {
-        "drugs": ESSENTIAL_MEDICINES,
-        "total": len(ESSENTIAL_MEDICINES),
-        "categories": CATEGORIES,
-    }
-
-
-@app.get("/api/defaults")
-def get_defaults():
-    """Return default planning parameters."""
-    return {
-        "defaults": DEFAULT_PARAMS,
-        "lead_times": LEAD_TIMES,
-        "seasons": ["rainy", "dry"],
-        "supply_sources": list(LEAD_TIMES.keys()),
-    }
-
-
-@app.get("/api/optimize")
-def run_optimization(
-    population: int = Query(default=50000, ge=1000, le=10_000_000),
-    budget_usd: float = Query(default=5000, ge=100, le=1_000_000),
-    planning_months: int = Query(default=3, ge=1, le=12),
-    season: str = Query(default="rainy"),
-    supply_source: str = Query(default="regional_depot"),
-    wastage_pct: float = Query(default=8, ge=0, le=50),
-    prioritize_critical: bool = Query(default=True),
-):
-    """Compute optimal procurement plan given constraints."""
-    plan = optimize(
-        population=population,
-        budget_usd=budget_usd,
-        planning_months=planning_months,
-        season=season,
-        supply_source=supply_source,
-        wastage_pct=wastage_pct,
-        prioritize_critical=prioritize_critical,
-    )
-    return plan_to_dict(plan)
-
-
-# -- Status page (HF Space landing) ------------------------------------------
+# ── Status page ──────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 def status_page():
-    """Status dashboard shown when visiting the HF Space directly."""
     stats = _get("stats", default={})
-    risks = _get("stockout_risks")
-    facilities = _get("facilities")
+    conflicts = _get("price_conflicts")
+    mandis = _get("mandis")
 
-    n_facilities = stats.get("facilities_monitored", len(facilities))
-    n_drugs = stats.get("drugs_tracked", len(ESSENTIAL_MEDICINES))
+    n_mandis = stats.get("mandis_monitored", len(mandis))
+    n_commodities = stats.get("commodities_tracked", len(COMMODITIES))
     success_rate = stats.get("success_rate", 0)
-    high_risk = stats.get("high_risk_stockouts", 0)
+    n_conflicts = stats.get("price_conflicts_found", len(conflicts))
 
-    # Build stockout risk rows (top 5)
-    high_risks = [r for r in risks if r.get("stockout_risk", r.get("risk_level")) in ("high", "critical")]
-    risk_rows = ""
-    for r in high_risks[:6]:
-        level = r.get("stockout_risk", r.get("risk_level", ""))
-        badge_cls = "critical" if level == "critical" else "warning" if level == "high" else "watch"
-        days = r.get("days_of_stock", "?")
-        risk_rows += f"""
+    conflict_rows = ""
+    for c in conflicts[:6]:
+        conflict_rows += f"""
         <tr>
-            <td>{r.get('facility_name', r.get('facility_id', ''))}</td>
-            <td>{r.get('drug_name', r.get('drug_id', ''))}</td>
-            <td><span class="badge {badge_cls}">{level.upper()}</span></td>
-            <td>{days} days</td>
+            <td>{c.get('mandi_name', '')}</td>
+            <td>{c.get('commodity_name', '')}</td>
+            <td>Rs {c.get('agmarknet_price', 0):,.0f}</td>
+            <td>Rs {c.get('enam_price', 0):,.0f}</td>
+            <td>{c.get('delta_pct', 0)}%</td>
+            <td>Rs {c.get('reconciled_price', 0):,.0f}</td>
         </tr>"""
 
-    if not risk_rows:
-        risk_rows = '<tr><td colspan="4" style="color:#888;text-align:center;padding:16px;">No active stockout risks</td></tr>'
+    if not conflict_rows:
+        conflict_rows = '<tr><td colspan="6" style="color:#888;text-align:center;padding:16px;">No price conflicts detected</td></tr>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Health Supply Chain Optimizer — API Status</title>
+<title>Market Intelligence Agent -- API Status</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: system-ui, -apple-system, sans-serif; background: #faf8f5; color: #1a1a1a; padding: 32px; max-width: 720px; margin: 0 auto; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #faf8f5; color: #1a1a1a; padding: 32px; max-width: 780px; margin: 0 auto; }}
   h1 {{ font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }}
   .subtitle {{ color: #888; font-size: 0.85rem; margin-bottom: 24px; }}
   .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }}
@@ -985,68 +803,53 @@ def status_page():
   table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
   th {{ text-align: left; font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #e0dcd5; }}
   td {{ padding: 8px; border-bottom: 1px solid #f0ede8; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }}
-  .badge.critical {{ background: #e6394622; color: #e63946; }}
-  .badge.warning {{ background: #e67e2222; color: #e67e22; }}
-  .badge.watch {{ background: #d4a01922; color: #d4a019; }}
   .link {{ color: #2a9d8f; text-decoration: none; font-weight: 600; }}
   .link:hover {{ text-decoration: underline; }}
   .footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #e0dcd5; font-size: 0.75rem; color: #aaa; }}
 </style>
 </head>
 <body>
-  <h1>Health Supply Chain Optimizer <span class="status">Running</span></h1>
-  <p class="subtitle">API backend for the Health Supply Chain Monitor — <a class="link" href="https://health-supply-optimizer.vercel.app" target="_blank">Open Frontend</a></p>
+  <h1>Market Intelligence Agent <span class="status">Running</span></h1>
+  <p class="subtitle">AI-powered market timing for Tamil Nadu smallholder farmers</p>
 
   <div class="grid">
-    <div class="card">
-      <div class="label">Facilities</div>
-      <div class="value">{n_facilities}</div>
-    </div>
-    <div class="card">
-      <div class="label">Medicines Tracked</div>
-      <div class="value">{n_drugs}</div>
-    </div>
-    <div class="card">
-      <div class="label">Stockout Risks</div>
-      <div class="value" style="color: {'#e63946' if high_risk > 0 else '#1a1a1a'};">{high_risk}</div>
-    </div>
-    <div class="card">
-      <div class="label">Data Reliability</div>
-      <div class="value">{round(success_rate * 100)}%</div>
-    </div>
+    <div class="card"><div class="label">Mandis</div><div class="value">{n_mandis}</div></div>
+    <div class="card"><div class="label">Commodities</div><div class="value">{n_commodities}</div></div>
+    <div class="card"><div class="label">Price Conflicts</div><div class="value">{n_conflicts}</div></div>
+    <div class="card"><div class="label">Reliability</div><div class="value">{round(success_rate * 100)}%</div></div>
   </div>
 
-  <div class="section">Stockout Risks</div>
-  <table><thead><tr><th>Facility</th><th>Medicine</th><th>Level</th><th>Stock Left</th></tr></thead><tbody>{risk_rows}</tbody></table>
+  <div class="section">Price Conflicts (Agmarknet vs eNAM)</div>
+  <table>
+    <thead><tr><th>Mandi</th><th>Commodity</th><th>Agmarknet</th><th>eNAM</th><th>Delta</th><th>Reconciled</th></tr></thead>
+    <tbody>{conflict_rows}</tbody>
+  </table>
 
   <div class="section">API Endpoints</div>
   <table>
     <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
     <tbody>
       <tr><td><code>/health</code></td><td>Service health check</td></tr>
-      <tr><td><code>/api/facilities</code></td><td>All {n_facilities} facilities with stock status</td></tr>
-      <tr><td><code>/api/stock-levels</code></td><td>Stock levels by drug x facility</td></tr>
-      <tr><td><code>/api/demand-forecast</code></td><td>Predicted demand with climate factors</td></tr>
-      <tr><td><code>/api/procurement-plan</code></td><td>Optimized procurement plan with agent reasoning</td></tr>
-      <tr><td><code>/api/stockout-risks</code></td><td>Medicines at risk of running out</td></tr>
-      <tr><td><code>/api/raw-inputs</code></td><td>Raw facility stock reports (unstructured text)</td></tr>
-      <tr><td><code>/api/extracted-data</code></td><td>AI-extracted structured data from reports</td></tr>
+      <tr><td><code>/api/mandis</code></td><td>All {n_mandis} Tamil Nadu mandis</td></tr>
+      <tr><td><code>/api/market-prices</code></td><td>Reconciled prices by commodity x mandi</td></tr>
+      <tr><td><code>/api/price-forecast</code></td><td>7/14/30d price predictions</td></tr>
+      <tr><td><code>/api/sell-recommendations</code></td><td>Optimal sell options for sample farmers</td></tr>
+      <tr><td><code>/api/price-conflicts</code></td><td>Agmarknet vs eNAM disagreements</td></tr>
+      <tr><td><code>/api/raw-inputs</code></td><td>Raw data from all sources</td></tr>
+      <tr><td><code>/api/extracted-data</code></td><td>Normalized price data</td></tr>
       <tr><td><code>/api/reconciled-data</code></td><td>Reconciled data with conflict resolution</td></tr>
-      <tr><td><code>/api/model-info</code></td><td>XGBoost model metrics and feature importances</td></tr>
+      <tr><td><code>/api/model-info</code></td><td>XGBoost model metrics</td></tr>
       <tr><td><code>/api/pipeline/runs</code></td><td>Pipeline run history</td></tr>
       <tr><td><code>/api/pipeline/stats</code></td><td>Aggregate statistics</td></tr>
     </tbody>
   </table>
 
-  <div class="footer">
-    Vercel frontend: <a class="link" href="https://health-supply-optimizer.vercel.app">health-supply-optimizer.vercel.app</a>
-  </div>
+  <div class="footer">Post-harvest market intelligence for Tamil Nadu | Agmarknet + eNAM + NASA POWER</div>
 </body>
 </html>"""
 
 
-# -- Static file serving -----------------------------------------------------
+# ── Static file serving ──────────────────────────────────────────────────
 
 dist_path = Path(__file__).parent.parent / "frontend" / "dist"
 if dist_path.exists():
@@ -1054,6 +857,8 @@ if dist_path.exists():
 
     @app.get("/{path:path}")
     async def serve_spa(path: str):
+        if path.startswith("api/") or path == "health":
+            return None
         file_path = dist_path / path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))

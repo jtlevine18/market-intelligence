@@ -62,7 +62,7 @@
   /* ── Accent card (left-border, clinical record style) ── */
   .card-accent {
     @apply bg-white rounded-[10px] border border-warm-border;
-    border-left: 3px solid #2a9d8f;
+    border-left: 3px solid #d4a019;
     transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
   }
 
@@ -298,7 +298,7 @@
   .section-header {
     @apply uppercase text-[0.78rem] font-sans font-semibold text-warm-muted pb-2 mb-4;
     letter-spacing: 1.5px;
-    border-bottom: 2px solid #2a9d8f;
+    border-bottom: 2px solid #d4a019;
   }
 
   /* ── Alert banner (stockout warnings) ── */

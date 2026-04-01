@@ -1,375 +1,321 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import MetricCard from '../components/MetricCard'
 import { LoadingSpinner, ErrorState } from '../components/LoadingState'
 import {
-  useRawInputs,
-  useExtractedData,
-  useReconciledData,
-  useFacilities,
+  usePriceConflicts,
+  useMarketPrices,
+  usePipelineStats,
 } from '../lib/api'
+import { formatRs } from '../lib/format'
+
+function deltaPctColor(pct: number): string {
+  if (pct >= 10) return '#e63946'
+  if (pct >= 5) return '#d4a019'
+  return '#2a9d8f'
+}
 
 export default function Inputs() {
-  const rawInputs = useRawInputs()
-  const extracted = useExtractedData()
-  const reconciled = useReconciledData()
-  const facilities = useFacilities()
+  const conflicts = usePriceConflicts()
+  const prices = useMarketPrices()
+  const stats = usePipelineStats()
 
-  const [selectedFacility, setSelectedFacility] = useState<string | null>(null)
+  const conflictList = conflicts.data?.price_conflicts ?? []
+  const totalPrices = prices.data?.total ?? 0
+  const totalConflicts = conflicts.data?.total ?? 0
 
-  const facilityIds = useMemo(() => {
-    return Object.keys(rawInputs.data?.raw_inputs ?? {})
-  }, [rawInputs.data])
+  // ── Pick a sample conflict for the side-by-side view ────────────────────
+  const sampleConflict = conflictList[0] ?? null
 
-  const activeFacility = selectedFacility ?? facilityIds[0] ?? null
+  // ── Find matching price records for the sample conflict ─────────────────
+  const samplePrices = useMemo(() => {
+    if (!sampleConflict || !prices.data?.market_prices) return []
+    return prices.data.market_prices.filter(
+      (p) => p.mandi_id === sampleConflict.mandi_id && p.commodity_id === sampleConflict.commodity_id,
+    )
+  }, [sampleConflict, prices.data])
 
-  const facilityNameMap = useMemo(() => {
-    const map: Record<string, string> = {}
-    facilities.data?.facilities?.forEach((f) => {
-      map[f.facility_id] = f.name
-    })
-    return map
-  }, [facilities.data])
+  // ── Metrics ─────────────────────────────────────────────────────────────
+  const sourcesCount = (stats.data?.data_sources ?? []).length || 2
+  const resolutionRate = totalConflicts > 0
+    ? Math.round((conflictList.filter((c) => c.reconciled_price > 0).length / totalConflicts) * 100)
+    : 100
 
-  // Aggregate metrics
-  const totalConflicts = reconciled.data?.total_conflicts ?? 0
-  const totalFacilities = rawInputs.data?.total_facilities ?? 0
-  const avgQuality = useMemo(() => {
-    if (!reconciled.data?.reconciled_data) return 0
-    const entries = Object.values(reconciled.data.reconciled_data)
-    if (!entries.length) return 0
-    return entries.reduce((sum, e) => sum + e.quality_score, 0) / entries.length
-  }, [reconciled.data])
-
-  if (rawInputs.isLoading || extracted.isLoading || reconciled.isLoading)
-    return <LoadingSpinner />
-  if (rawInputs.isError)
-    return <ErrorState onRetry={() => rawInputs.refetch()} />
-  if (extracted.isError)
-    return <ErrorState onRetry={() => extracted.refetch()} />
-
-  const rawFacility = activeFacility
-    ? rawInputs.data?.raw_inputs[activeFacility]
-    : null
-  const extractedFacility = activeFacility
-    ? extracted.data?.extracted_data[activeFacility]
-    : null
-  const reconciledFacility = activeFacility
-    ? reconciled.data?.reconciled_data[activeFacility]
-    : null
+  if (conflicts.isLoading || prices.isLoading) return <LoadingSpinner />
+  if (conflicts.isError) return <ErrorState onRetry={() => conflicts.refetch()} />
 
   return (
     <div className="animate-slide-up">
       <div data-tour="inputs-title" className="pt-2 pb-6">
-        <h1 className="page-title">Facility Data</h1>
+        <h1 className="page-title">Data Sources</h1>
         <p className="page-caption">
-          AI reads messy stock reports from health facilities and turns them into reliable numbers
+          How conflicting government data gets reconciled into a single trusted price
         </p>
       </div>
 
+      {/* ── Metrics ───────────────────────────────────────────────────────── */}
       <div data-tour="inputs-metrics" className="mb-8">
         <div className="section-header">Data Overview</div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-stagger">
           <MetricCard
-            label="Reports Received"
-            value={totalFacilities}
-            subtitle="facilities reporting"
+            label="Price Records"
+            value={totalPrices}
+            subtitle="scraped today"
           />
           <MetricCard
-            label="Discrepancies Found"
+            label="Sources"
+            value={sourcesCount}
+            subtitle="Agmarknet + eNAM"
+          />
+          <MetricCard
+            label="Conflicts Found"
             value={totalConflicts}
-            subtitle="corrected automatically"
+            subtitle="price discrepancies"
           />
           <MetricCard
-            label="Processing"
-            value="AI-Powered"
-            subtitle="reads unstructured text"
-          />
-          <MetricCard
-            label="Data Reliability"
-            value={`${Math.round(avgQuality * 100)}%`}
-            subtitle="after verification"
+            label="Resolution Rate"
+            value={`${resolutionRate}%`}
+            subtitle="auto-reconciled"
           />
         </div>
       </div>
 
-      {/* Facility selector */}
-      <div className="mb-6">
-        <label className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mr-3">
-          Facility
-        </label>
-        <select
-          value={activeFacility ?? ''}
-          onChange={(e) => setSelectedFacility(e.target.value)}
-          className="px-3 py-2 text-sm font-sans rounded-lg border border-warm-border bg-white text-[#1a1a1a] focus:outline-none focus:ring-2 focus:ring-gold/30"
-        >
-          {facilityIds.map((fid) => (
-            <option key={fid} value={fid}>
-              {facilityNameMap[fid] ?? fid}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* ── Side-by-side: Raw vs Reconciled ────────────────────────────────── */}
+      {sampleConflict && (
+        <div data-tour="inputs-reconciled" className="mb-8">
+          <div className="section-header">Example: Price Reconciliation</div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-      {/* Two-column layout */}
-      {activeFacility && rawFacility && (
-        <div
-          data-tour="inputs-extraction"
-          className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8"
-        >
-          {/* LEFT: Raw Input */}
-          <div className="space-y-4">
-            <div className="section-header">Report as Received</div>
+            {/* LEFT: Raw conflicting data */}
+            <div className="space-y-4">
+              <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0">
+                Raw Data (Conflicting)
+              </p>
 
-            {/* Stock report — paper-like */}
-            <div
-              className="rounded-lg p-5 font-mono text-xs leading-relaxed whitespace-pre-wrap overflow-x-auto"
-              style={{
-                backgroundColor: '#fefae0',
-                border: '1px solid #d4c89a',
-                boxShadow: '2px 2px 8px rgba(0,0,0,0.06)',
-                transform: 'rotate(-0.3deg)',
-                maxHeight: 400,
-                overflowY: 'auto',
-              }}
-            >
-              {rawFacility.stock_report}
-            </div>
-
-            {/* IDSR report */}
-            {rawFacility.idsr_report && (
+              {/* Agmarknet report */}
               <div
-                className="rounded-lg p-5 font-mono text-xs leading-relaxed whitespace-pre-wrap overflow-x-auto"
+                className="rounded-lg p-5"
+                style={{
+                  backgroundColor: '#fefae0',
+                  border: '1px solid #d4c89a',
+                  boxShadow: '2px 2px 8px rgba(0,0,0,0.06)',
+                }}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold text-[#1a1a1a] uppercase tracking-wider">Agmarknet</span>
+                  <span className="badge-amber text-[0.65rem]">Source A</span>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Mandi</span>
+                    <span className="font-semibold text-[#1a1a1a]">{sampleConflict.mandi_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Commodity</span>
+                    <span className="font-semibold text-[#1a1a1a]">{sampleConflict.commodity_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Price</span>
+                    <span className="font-serif font-bold text-lg text-[#1a1a1a]">
+                      {formatRs(sampleConflict.agmarknet_price)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* eNAM report */}
+              <div
+                className="rounded-lg p-5"
                 style={{
                   backgroundColor: '#f0f4ff',
                   border: '1px solid #b8c9e8',
                   boxShadow: '2px 2px 8px rgba(0,0,0,0.04)',
-                  transform: 'rotate(0.2deg)',
-                  maxHeight: 300,
-                  overflowY: 'auto',
                 }}
               >
-                {rawFacility.idsr_report}
-              </div>
-            )}
-
-            {/* CHW messages — chat bubbles */}
-            {rawFacility.chw_messages.length > 0 && (
-              <div>
-                <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2">
-                  CHW Messages
-                </p>
-                <div className="space-y-2">
-                  {rawFacility.chw_messages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className="text-xs leading-relaxed font-sans"
-                      style={{
-                        backgroundColor: '#dcfce7',
-                        border: '1px solid #a7d9b8',
-                        borderRadius: '12px 12px 12px 4px',
-                        padding: '8px 12px',
-                        maxWidth: '90%',
-                      }}
-                    >
-                      {msg}
-                    </div>
-                  ))}
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold text-[#1a1a1a] uppercase tracking-wider">eNAM</span>
+                  <span className="badge-blue text-[0.65rem]">Source B</span>
                 </div>
-              </div>
-            )}
-          </div>
-
-          {/* RIGHT: Extracted + Reconciled Data */}
-          <div className="space-y-4">
-            <div className="section-header">What the AI Found</div>
-
-            {/* Stock table */}
-            {extractedFacility && (
-              <div className="table-container">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Drug</th>
-                      <th>Stock Level</th>
-                      <th>Days Remaining</th>
-                      <th>Source</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(extractedFacility.drugs).map(
-                      ([drugId, drug]) => (
-                        <tr key={drugId}>
-                          <td className="font-semibold text-[#1a1a1a] text-xs">
-                            {drugId}
-                          </td>
-                          <td>{drug.stock_level.toLocaleString()}</td>
-                          <td>
-                            <span
-                              className="font-semibold"
-                              style={{
-                                color:
-                                  drug.days_of_stock <= 14
-                                    ? '#e63946'
-                                    : drug.days_of_stock <= 30
-                                      ? '#d4a019'
-                                      : '#2a9d8f',
-                              }}
-                            >
-                              {drug.days_of_stock.toFixed(0)}d
-                            </span>
-                          </td>
-                          <td className="text-xs text-warm-muted">
-                            {drug.source}
-                          </td>
-                        </tr>
-                      ),
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Disease cases */}
-            {extractedFacility &&
-              Object.keys(extractedFacility.disease_cases).length > 0 && (
-                <div className="card card-body">
-                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2">
-                    Disease Cases (Weekly)
-                  </p>
-                  <div className="grid grid-cols-3 gap-3">
-                    {Object.entries(extractedFacility.disease_cases).map(
-                      ([disease, count]) => (
-                        <div key={disease} className="text-center">
-                          <p className="text-lg font-serif font-bold text-[#1a1a1a] m-0">
-                            {count.toLocaleString()}
-                          </p>
-                          <p className="text-xs text-warm-muted m-0 capitalize">
-                            {disease}
-                          </p>
-                        </div>
-                      ),
-                    )}
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Mandi</span>
+                    <span className="font-semibold text-[#1a1a1a]">{sampleConflict.mandi_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Commodity</span>
+                    <span className="font-semibold text-[#1a1a1a]">{sampleConflict.commodity_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Price</span>
+                    <span className="font-serif font-bold text-lg text-[#1a1a1a]">
+                      {formatRs(sampleConflict.enam_price)}
+                    </span>
                   </div>
                 </div>
-              )}
+              </div>
 
-            {/* CHW-identified alerts */}
-            {extractedFacility &&
-              extractedFacility.alerts.length > 0 && (
-                <div>
-                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2">
-                    CHW-Identified Needs
-                  </p>
-                  <div className="space-y-2">
-                    {extractedFacility.alerts.map((alert, i) => (
-                      <div
-                        key={i}
-                        className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
-                      >
-                        <span className="badge-orange text-[0.65rem] shrink-0 mt-0.5">
-                          urgent
-                        </span>
-                        <span className="text-xs text-warm-body leading-relaxed">
-                          {alert}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {/* Delta callout */}
+              <div
+                className="rounded-lg p-3 text-center"
+                style={{
+                  background: 'rgba(230, 57, 70, 0.06)',
+                  border: '1px solid rgba(230, 57, 70, 0.2)',
+                }}
+              >
+                <span className="text-xs text-warm-muted">Price difference: </span>
+                <span className="text-sm font-serif font-bold" style={{ color: deltaPctColor(sampleConflict.delta_pct) }}>
+                  {sampleConflict.delta_pct.toFixed(1)}%
+                </span>
+                <span className="text-xs text-warm-muted">
+                  {' '}({formatRs(Math.abs(sampleConflict.agmarknet_price - sampleConflict.enam_price))})
+                </span>
+              </div>
+            </div>
 
-            {/* Conflicts */}
-            {reconciledFacility &&
-              reconciledFacility.conflicts.length > 0 && (
-                <div data-tour="inputs-conflicts">
-                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2">
-                    Discrepancies Detected
-                  </p>
-                  <div className="space-y-3">
-                    {reconciledFacility.conflicts.map((conflict, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg p-3"
-                        style={{
-                          backgroundColor: '#fffbeb',
-                          border: '2px solid #d4a019',
-                        }}
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="font-semibold text-sm text-[#1a1a1a]">
-                            {conflict.drug_name}
-                          </span>
-                          <span className="badge-amber text-[0.65rem]">
-                            {conflict.resolution}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 mb-2">
-                          <div className="text-xs">
-                            <span className="text-warm-muted">
-                              Stock report:{' '}
-                            </span>
-                            <span className="font-semibold text-[#1a1a1a]">
-                              {conflict.extracted_value.toLocaleString()}
-                            </span>
-                          </div>
-                          <div className="text-xs">
-                            <span className="text-warm-muted">
-                              LMIS record:{' '}
-                            </span>
-                            <span className="font-semibold text-[#1a1a1a]">
-                              {conflict.simulated_value.toLocaleString()}
-                            </span>
-                          </div>
-                        </div>
-                        <p className="text-xs text-warm-body leading-relaxed m-0 italic">
-                          {conflict.reasoning}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+            {/* RIGHT: Reconciled result */}
+            <div className="space-y-4">
+              <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0">
+                AI Reconciled
+              </p>
 
-            {/* Quality score */}
-            {reconciledFacility && (
-              <div className="card card-body">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider m-0">
-                    Data Reliability Score
-                  </p>
-                  <span
-                    className="text-lg font-serif font-bold"
-                    style={{
-                      color:
-                        reconciledFacility.quality_score >= 0.8
-                          ? '#2a9d8f'
-                          : reconciledFacility.quality_score >= 0.5
-                            ? '#d4a019'
-                            : '#e63946',
-                    }}
-                  >
-                    {Math.round(reconciledFacility.quality_score * 100)}%
+              <div
+                className="rounded-lg p-5"
+                style={{
+                  backgroundColor: '#f0faf8',
+                  border: '2px solid #2a9d8f',
+                }}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#2a9d8f' }}>
+                    Reconciled Price
                   </span>
+                  <span className="badge-green text-[0.65rem]">{sampleConflict.resolution}</span>
                 </div>
-                <div className="w-full h-2 bg-warm-header-bg rounded-full overflow-hidden mt-2">
-                  <div
-                    className="h-full rounded-full transition-all"
-                    style={{
-                      width: `${Math.round(reconciledFacility.quality_score * 100)}%`,
-                      backgroundColor:
-                        reconciledFacility.quality_score >= 0.8
-                          ? '#2a9d8f'
-                          : reconciledFacility.quality_score >= 0.5
-                            ? '#d4a019'
-                            : '#e63946',
-                    }}
-                  />
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Mandi</span>
+                    <span className="font-semibold text-[#1a1a1a]">{sampleConflict.mandi_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Commodity</span>
+                    <span className="font-semibold text-[#1a1a1a]">{sampleConflict.commodity_name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-warm-muted">Final price</span>
+                    <span className="font-serif font-bold text-xl" style={{ color: '#2a9d8f' }}>
+                      {formatRs(sampleConflict.reconciled_price)}
+                    </span>
+                  </div>
                 </div>
               </div>
-            )}
+
+              {/* Investigation steps */}
+              {(sampleConflict as Record<string, unknown>).investigation_steps && (
+                <div className="card-accent accent-amber p-4">
+                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-3 m-0">
+                    Agent Investigation
+                  </p>
+                  <div className="space-y-2.5">
+                    {((sampleConflict as Record<string, unknown>).investigation_steps as Array<{tool: string; finding: string}>).map((step, i) => (
+                      <div key={i} className="flex gap-2">
+                        <span className="shrink-0 mt-0.5 w-5 h-5 rounded flex items-center justify-center text-[0.6rem] font-bold" style={{ background: 'rgba(212,160,25,0.15)', color: '#d4a019' }}>
+                          {i + 1}
+                        </span>
+                        <div>
+                          <span className="text-[0.7rem] font-mono font-semibold text-warm-muted">{step.tool}</span>
+                          <p className="text-xs text-warm-body leading-relaxed m-0 mt-0.5">{step.finding}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-warm-border">
+                    <p className="text-xs font-semibold m-0" style={{ color: '#2a9d8f' }}>
+                      Decision: {sampleConflict.reasoning}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Fallback: plain reasoning if no investigation steps */}
+              {!(sampleConflict as Record<string, unknown>).investigation_steps && (
+                <div className="card-accent accent-amber p-4">
+                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2 m-0">
+                    AI Reasoning
+                  </p>
+                  <p className="text-sm text-warm-body leading-relaxed m-0">
+                    {sampleConflict.reasoning}
+                  </p>
+                </div>
+              )}
+
+              {/* Related prices for this mandi/commodity */}
+              {samplePrices.length > 0 && (
+                <div className="card card-body">
+                  <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2 m-0">
+                    Full Price Record
+                  </p>
+                  <div className="space-y-1.5 text-sm">
+                    {samplePrices.map((p, i) => (
+                      <div key={i} className="flex justify-between">
+                        <span className="text-warm-muted">{p.date}</span>
+                        <span className="font-semibold text-[#1a1a1a]">{formatRs(p.reconciled_price_rs)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      {/* ── All Conflicts ──────────────────────────────────────────────────── */}
+      <div className="mb-8">
+        <div className="section-header">All Price Conflicts</div>
+        {conflictList.length === 0 ? (
+          <p className="text-sm text-warm-muted font-sans">No price conflicts detected.</p>
+        ) : (
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mandi</th>
+                  <th>Commodity</th>
+                  <th>Agmarknet</th>
+                  <th>eNAM</th>
+                  <th>Delta</th>
+                  <th>Resolution</th>
+                  <th>Reconciled</th>
+                  <th>Reasoning</th>
+                </tr>
+              </thead>
+              <tbody>
+                {conflictList.map((c, i) => (
+                  <tr key={`${c.mandi_id}-${c.commodity_id}-${i}`}>
+                    <td className="font-semibold text-[#1a1a1a]">{c.mandi_name}</td>
+                    <td>{c.commodity_name}</td>
+                    <td>{formatRs(c.agmarknet_price)}</td>
+                    <td>{formatRs(c.enam_price)}</td>
+                    <td>
+                      <span className="font-semibold" style={{ color: deltaPctColor(c.delta_pct) }}>
+                        {c.delta_pct.toFixed(1)}%
+                      </span>
+                    </td>
+                    <td>
+                      <span className="badge-amber text-[0.65rem]">{c.resolution}</span>
+                    </td>
+                    <td className="font-semibold" style={{ color: '#2a9d8f' }}>
+                      {formatRs(c.reconciled_price)}
+                    </td>
+                    <td className="text-xs text-warm-body max-w-xs">
+                      {c.reasoning.length > 100 ? c.reasoning.slice(0, 100) + '\u2026' : c.reasoning}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

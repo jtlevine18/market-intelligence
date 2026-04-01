@@ -8,289 +8,171 @@ async function fetchJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
-// ── Types (matched to actual backend response shapes) ─────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────
 
-// ── New AI pipeline types ─────────────────────────────────────────────────
-
-export interface RawFacilityInput {
-  stock_report: string
-  idsr_report?: string
-  chw_messages: string[]
+export interface Mandi {
+  mandi_id: string
+  name: string
+  district: string
+  latitude: number
+  longitude: number
+  market_type: string
+  enam_integrated: boolean
+  reporting_quality: string
+  commodities_traded: string[]
+  last_updated: string
 }
 
-export interface RawInputsResponse {
-  raw_inputs: Record<string, RawFacilityInput>
-  total_facilities: number
-  source: string
+export interface MandisResponse {
+  mandis: Mandi[]
+  total: number
 }
 
-export interface ExtractedDrug {
-  stock_level: number
-  days_of_stock: number
-  source: string
+export interface MarketPrice {
+  mandi_id: string
+  mandi_name: string
+  commodity_id: string
+  commodity_name: string
+  category: string
+  price_rs: number
+  agmarknet_price_rs: number | null
+  enam_price_rs: number | null
+  reconciled_price_rs: number
+  confidence: number
+  price_trend: string
+  date: string
 }
 
-export interface ExtractedFacilityData {
-  facility_id: string
-  drugs: Record<string, ExtractedDrug>
-  disease_cases: Record<string, number>
-  alerts: string[]
+export interface MarketPricesResponse {
+  market_prices: MarketPrice[]
+  total: number
 }
 
-export interface ExtractedDataResponse {
-  extracted_data: Record<string, ExtractedFacilityData>
-  total_facilities: number
-  source: string
+export interface PriceForecast {
+  mandi_id: string
+  mandi_name: string
+  commodity_id: string
+  commodity_name: string
+  current_price_rs: number
+  price_7d: number
+  price_14d: number
+  price_30d: number
+  ci_lower_7d: number
+  ci_upper_7d: number
+  direction: string
+  confidence: number
+  seasonal_index: number
 }
 
-export interface ReconciledDrug {
-  stock_level: number
-  consumption_daily: number
-  days_of_stock_remaining: number
-  source: string
+export interface PriceForecastsResponse {
+  price_forecasts: PriceForecast[]
+  total: number
 }
 
-export interface Conflict {
-  drug_id: string
-  drug_name: string
-  field: string
-  simulated_value: number
-  extracted_value: number
+export interface SellOption {
+  mandi_id: string
+  mandi_name: string
+  sell_timing: string
+  market_price_rs: number
+  transport_cost_rs: number
+  storage_loss_rs: number
+  mandi_fee_rs: number
+  net_price_rs: number
+  distance_km: number
+  drive_time_min: number
+  confidence: number
+}
+
+export interface CreditReadiness {
+  readiness: 'strong' | 'moderate' | 'not_yet'
+  expected_revenue_rs: number
+  min_revenue_rs: number
+  max_advisable_input_loan_rs: number
+  revenue_confidence: number
+  loan_to_revenue_pct: number
+  strengths: string[]
+  risks: string[]
+  advice_en: string
+  advice_ta: string
+}
+
+export interface SellRecommendation {
+  farmer_name: string
+  commodity_id: string
+  commodity_name: string
+  quantity_quintals: number
+  farmer_lat: number
+  farmer_lon: number
+  best_option: SellOption
+  all_options: SellOption[]
+  potential_gain_rs: number
+  recommendation_text: string
+  recommendation_tamil: string
+  credit_readiness?: CreditReadiness
+}
+
+export interface SellRecommendationsResponse {
+  sell_recommendations: SellRecommendation[]
+  total: number
+}
+
+export interface PriceConflict {
+  mandi_id: string
+  mandi_name: string
+  commodity_id: string
+  commodity_name: string
+  agmarknet_price: number
+  enam_price: number
+  delta_pct: number
   resolution: string
+  reconciled_price: number
   reasoning: string
 }
 
-export interface ReconciledFacilityData {
-  facility_id: string
-  stock_by_drug: Record<string, ReconciledDrug>
-  conflicts: Conflict[]
-  disease_cases: Record<string, number>
-  quality_score: number
+export interface PriceConflictsResponse {
+  price_conflicts: PriceConflict[]
+  total: number
+}
+
+// ── Raw / Extracted / Reconciled responses ────────────────────────────────────
+
+export interface RawInputsResponse {
+  raw_inputs: Record<string, unknown>
+  sources: string[]
+}
+
+export interface ExtractedDataResponse {
+  extracted_data: Record<string, unknown>
+  total_mandis: number
 }
 
 export interface ReconciledDataResponse {
-  reconciled_data: Record<string, ReconciledFacilityData>
-  total_facilities: number
+  reconciled_data: Record<string, unknown>
+  total_mandis: number
   total_conflicts: number
-  source: string
 }
 
-export interface MLModelMetrics {
-  rmse?: number
-  mae?: number
-  r2?: number
-  train_samples?: number
-  test_samples?: number
-  feature_importances?: Record<string, number>
-}
-
-export interface ResidualMetrics {
-  rmse_residual_before?: number
-  rmse_residual_after?: number
-  rmse_improvement_pct?: number
-  r2_residual?: number
-  features_used?: string[]
-  feature_importances?: Record<string, number>
-}
-
-export interface MLStackInfo {
-  primary_model: {
-    type: string
-    features: number
-    training_samples?: number
-    metrics: MLModelMetrics
-  }
-  residual_correction: {
-    type: string
-    purpose: string
-    metrics: ResidualMetrics
-  }
-  chronos_bolt?: {
-    name: string
-    model_id: string
-    parameters: string
-    pretraining_data: string
-    type: string
-    inference: string
-    status: string
-  }
-  anomaly_detection: {
-    type: string
-    purpose: string
-  }
-  rag: {
-    type: string
-    purpose: string
-  }
-  agents: Record<string, string>
-}
+// ── Model info ───────────────────────────────────────────────────────────────
 
 export interface ModelInfoResponse {
   model_metrics: {
     model_type: string
-    primary_model?: MLModelMetrics
-    residual_model?: ResidualMetrics
-    chronos_model?: Record<string, string>
-    features?: string[]
-    feature_importances?: Record<string, number>
-    // Legacy fields for epidemiological mode
-    model_source?: string
     rmse?: number
     mae?: number
-    r_squared?: number
-    note?: string
+    r2?: number
+    features?: string[]
+    feature_importances?: Record<string, number>
+    train_samples?: number
+    test_samples?: number
   }
-  ml_stack?: MLStackInfo
-  source: string
+  ml_stack?: {
+    primary_model: { type: string; features: number; metrics: Record<string, number> }
+    agents: Record<string, string>
+    [key: string]: unknown
+  }
 }
 
-export interface ReasoningTraceStep {
-  round: number
-  tool: string
-  input: Record<string, unknown>
-  result_summary: string
-}
-
-export interface Redistribution {
-  from_facility: string
-  to_facility: string
-  drug_id: string
-  quantity: number
-  transit_days: number
-  reason: string
-}
-
-// ── Core types ────────────────────────────────────────────────────────────
-
-export interface Facility {
-  facility_id: string
-  name: string
-  district: string
-  country: string
-  facility_type: string
-  population_served: number
-  reporting_quality: string
-  data_quality_score: number
-  budget_usd: number
-  budget_used_usd: number
-  stockout_risks: number
-  last_updated: string
-}
-
-export interface FacilitiesResponse {
-  facilities: Facility[]
-  total: number
-  countries?: string[]
-}
-
-export interface StockLevel {
-  facility_id: string
-  facility_name: string
-  drug_id: string
-  drug_name: string
-  category: string
-  critical: boolean
-  stock_level: number
-  consumption_daily: number
-  days_of_stock: number
-  stockout_risk: string
-  date: string
-  anomaly_score?: number
-  is_anomaly?: boolean
-}
-
-export interface StockLevelsResponse {
-  stock_levels: StockLevel[]
-  total: number
-}
-
-export interface DemandForecast {
-  facility_id: string
-  facility_name: string
-  drug_id: string
-  drug_name: string
-  category: string
-  predicted_demand_monthly: number
-  baseline_demand_monthly: number
-  demand_multiplier: number
-  confidence: number
-  contributing_factors: Array<Record<string, unknown>>
-  climate_driven: boolean
-  risk_level: string
-  model_source?: string
-  prediction_interval?: { lower: number; upper: number }
-  model_metrics?: { rmse: number; r_squared: number }
-}
-
-export interface DemandForecastResponse {
-  forecasts: DemandForecast[]
-  total: number
-}
-
-export interface ProcurementOrder {
-  drug_id: string
-  name: string
-  category: string
-  unit: string
-  critical: boolean
-  demand_qty: number
-  safety_stock_qty: number
-  total_need: number
-  ordered_qty: number
-  unit_cost_usd: number
-  total_cost_usd: number
-  coverage_pct: number
-  stockout_risk: string
-  days_of_stock: number
-}
-
-export interface ProcurementPlan {
-  population: number
-  budget_usd: number
-  budget_used_usd: number
-  budget_remaining_usd: number
-  planning_months: number
-  season: string
-  fully_covered: number
-  partially_covered: number
-  not_covered: number
-  critical_drugs_covered: number
-  critical_drugs_total: number
-  stockout_risks: number
-  orders: ProcurementOrder[]
-  facility_id: string
-  facility_name: string
-  agent_reasoning?: string
-  optimization_method?: string
-  reasoning_trace?: ReasoningTraceStep[]
-  redistributions?: Redistribution[]
-}
-
-export interface ProcurementPlanResponse {
-  plans: ProcurementPlan[]
-  total: number
-}
-
-export interface StockoutRisk {
-  facility_id: string
-  facility_name: string
-  drug_id: string
-  drug_name: string
-  category: string
-  critical: boolean
-  stock_level: number
-  consumption_daily: number
-  days_of_stock: number
-  stockout_risk: string
-  date: string
-}
-
-export interface StockoutRisksResponse {
-  risks: StockoutRisk[]
-  total: number
-  high: number
-  critical: number
-}
+// ── Pipeline types ───────────────────────────────────────────────────────────
 
 export interface PipelineStep {
   step: string
@@ -306,8 +188,6 @@ export interface PipelineRun {
   duration_s: number
   steps: PipelineStep[]
   total_cost_usd: number
-  facilities_processed?: number
-  stockout_risks_found?: number
 }
 
 export interface PipelineRunsResponse {
@@ -317,73 +197,55 @@ export interface PipelineRunsResponse {
 
 export interface PipelineStats {
   total_runs: number
-  successful_runs: number
   success_rate: number
-  facilities_monitored: number
-  drugs_tracked: number
-  high_risk_stockouts: number
+  mandis_monitored: number
+  commodities_tracked: number
+  price_conflicts_found: number
   total_cost_usd: number
-  avg_cost_per_run_usd: number
   last_run: string | null
-  data_sources?: string[]
+  data_sources: string[]
 }
 
-// ── Query hooks ──────────────────────────────────────────────────────────
+// ── Query hooks ──────────────────────────────────────────────────────────────
 
 const STALE_5MIN = 5 * 60 * 1000
 
-export function useFacilities() {
-  return useQuery<FacilitiesResponse>({
-    queryKey: ['facilities'],
-    queryFn: () => fetchJson('/api/facilities'),
+export function useMandis() {
+  return useQuery<MandisResponse>({
+    queryKey: ['mandis'],
+    queryFn: () => fetchJson('/api/mandis'),
     staleTime: STALE_5MIN,
   })
 }
 
-export function useStockLevels() {
-  return useQuery<StockLevelsResponse>({
-    queryKey: ['stock-levels'],
-    queryFn: () => fetchJson('/api/stock-levels'),
+export function useMarketPrices() {
+  return useQuery<MarketPricesResponse>({
+    queryKey: ['market-prices'],
+    queryFn: () => fetchJson('/api/market-prices'),
     staleTime: STALE_5MIN,
   })
 }
 
-export function useDemandForecast() {
-  return useQuery<DemandForecastResponse>({
-    queryKey: ['demand-forecast'],
-    queryFn: () => fetchJson('/api/demand-forecast'),
+export function usePriceForecasts() {
+  return useQuery<PriceForecastsResponse>({
+    queryKey: ['price-forecast'],
+    queryFn: () => fetchJson('/api/price-forecast'),
     staleTime: STALE_5MIN,
   })
 }
 
-export function useProcurementPlan() {
-  return useQuery<ProcurementPlanResponse>({
-    queryKey: ['procurement-plan'],
-    queryFn: () => fetchJson('/api/procurement-plan'),
+export function useSellRecommendations() {
+  return useQuery<SellRecommendationsResponse>({
+    queryKey: ['sell-recommendations'],
+    queryFn: () => fetchJson('/api/sell-recommendations'),
     staleTime: STALE_5MIN,
   })
 }
 
-export function useStockoutRisks() {
-  return useQuery<StockoutRisksResponse>({
-    queryKey: ['stockout-risks'],
-    queryFn: () => fetchJson('/api/stockout-risks'),
-    staleTime: STALE_5MIN,
-  })
-}
-
-export function usePipelineRuns() {
-  return useQuery<PipelineRunsResponse>({
-    queryKey: ['pipeline-runs'],
-    queryFn: () => fetchJson('/api/pipeline/runs'),
-    staleTime: STALE_5MIN,
-  })
-}
-
-export function usePipelineStats() {
-  return useQuery<PipelineStats>({
-    queryKey: ['pipeline-stats'],
-    queryFn: () => fetchJson('/api/pipeline/stats'),
+export function usePriceConflicts() {
+  return useQuery<PriceConflictsResponse>({
+    queryKey: ['price-conflicts'],
+    queryFn: () => fetchJson('/api/price-conflicts'),
     staleTime: STALE_5MIN,
   })
 }
@@ -416,6 +278,22 @@ export function useModelInfo() {
   return useQuery<ModelInfoResponse>({
     queryKey: ['model-info'],
     queryFn: () => fetchJson('/api/model-info'),
+    staleTime: STALE_5MIN,
+  })
+}
+
+export function usePipelineRuns() {
+  return useQuery<PipelineRunsResponse>({
+    queryKey: ['pipeline-runs'],
+    queryFn: () => fetchJson('/api/pipeline/runs'),
+    staleTime: STALE_5MIN,
+  })
+}
+
+export function usePipelineStats() {
+  return useQuery<PipelineStats>({
+    queryKey: ['pipeline-stats'],
+    queryFn: () => fetchJson('/api/pipeline/stats'),
     staleTime: STALE_5MIN,
   })
 }

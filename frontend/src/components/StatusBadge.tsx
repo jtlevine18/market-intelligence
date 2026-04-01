@@ -16,9 +16,6 @@ const STATUS_MAP: Record<string, { className: string; label?: string }> = {
   failed: { className: 'badge-red' },
   running: { className: 'badge-blue' },
   pending: { className: 'badge-slate' },
-  hospital: { className: 'badge-blue' },
-  health_center: { className: 'badge-amber', label: 'health center' },
-  health_post: { className: 'badge-slate', label: 'health post' },
 }
 
 export default function StatusBadge({ status, className = '' }: Props) {
