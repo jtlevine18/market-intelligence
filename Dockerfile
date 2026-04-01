@@ -11,13 +11,18 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download Chronos-2 model into HF cache so pipeline loads from disk
+# Must run AFTER pip install (needs huggingface_hub + chronos-forecasting)
+RUN python -c "\
+from huggingface_hub import snapshot_download; \
+print('Downloading chronos-bolt-base...'); \
+snapshot_download('amazon/chronos-bolt-base'); \
+print('Done.')" && echo "Chronos model cached" || echo "WARN: Chronos pre-download failed"
+
 COPY config.py .
 COPY src/ src/
 COPY markets.json commodities.json farmers.json ./
 RUN mkdir -p models
-
-# Pre-download Chronos-2 model so pipeline doesn't download at runtime
-RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('amazon/chronos-bolt-tiny')" || true
 
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
 USER appuser
