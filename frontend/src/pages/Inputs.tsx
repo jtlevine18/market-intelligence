@@ -209,13 +209,13 @@ export default function Inputs() {
               </div>
 
               {/* Investigation steps */}
-              {(sampleConflict as Record<string, unknown>).investigation_steps && (
+              {sampleConflict.investigation_steps && (
                 <div className="card-accent accent-amber p-4">
                   <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-3 m-0">
                     Agent Investigation
                   </p>
                   <div className="space-y-2.5">
-                    {((sampleConflict as Record<string, unknown>).investigation_steps as Array<{tool: string; finding: string}>).map((step, i) => (
+                    {sampleConflict.investigation_steps.map((step, i) => (
                       <div key={i} className="flex gap-2">
                         <span className="shrink-0 mt-0.5 w-5 h-5 rounded flex items-center justify-center text-[0.6rem] font-bold" style={{ background: 'rgba(212,160,25,0.15)', color: '#d4a019' }}>
                           {i + 1}
@@ -236,7 +236,7 @@ export default function Inputs() {
               )}
 
               {/* Fallback: plain reasoning if no investigation steps */}
-              {!(sampleConflict as Record<string, unknown>).investigation_steps && (
+              {!sampleConflict.investigation_steps && (
                 <div className="card-accent accent-amber p-4">
                   <p className="text-xs font-sans font-semibold text-warm-muted uppercase tracking-wider mb-2 m-0">
                     AI Reasoning

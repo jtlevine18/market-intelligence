@@ -116,6 +116,11 @@ export interface SellRecommendationsResponse {
   total: number
 }
 
+export interface InvestigationStep {
+  tool: string
+  finding: string
+}
+
 export interface PriceConflict {
   mandi_id: string
   mandi_name: string
@@ -127,6 +132,7 @@ export interface PriceConflict {
   resolution: string
   reconciled_price: number
   reasoning: string
+  investigation_steps?: InvestigationStep[]
 }
 
 export interface PriceConflictsResponse {
