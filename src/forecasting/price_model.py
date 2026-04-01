@@ -146,7 +146,7 @@ class XGBoostPriceModel:
             self.metrics = {
                 "rmse": round(float(np.sqrt(np.mean(residuals ** 2))), 1),
                 "mae": round(float(np.mean(np.abs(residuals))), 1),
-                "r_squared": round(float(1 - np.sum(residuals ** 2) / np.sum((actuals - actuals.mean()) ** 2)), 3),
+                "r2": round(float(1 - np.sum(residuals ** 2) / np.sum((actuals - actuals.mean()) ** 2)), 3),
                 "train_samples": len(training_data),
                 "features": len(feature_cols),
             }
@@ -197,7 +197,7 @@ class XGBoostPriceModel:
                 ci_lower_30d=round(p30 - ci_30, 0),
                 ci_upper_30d=round(p30 + ci_30, 0),
                 direction=direction,
-                confidence=round(0.85 - vol * 0.5, 2),
+                confidence=round(max(0.10, 0.85 - vol * 0.5), 2),
                 feature_importances=self.feature_importances,
             ))
 

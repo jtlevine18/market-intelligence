@@ -85,7 +85,9 @@ export default function Forecast() {
     // Find the forecast with the highest 7d price relative to current
     let best = forecasts[0]
     for (const f of forecasts) {
-      if ((f.price_7d / f.current_price_rs) > (best.price_7d / best.current_price_rs)) {
+      const fRatio = f.current_price_rs > 0 ? (f.price_7d / f.current_price_rs) : 1
+      const bestRatio = best.current_price_rs > 0 ? (best.price_7d / best.current_price_rs) : 1
+      if (fRatio > bestRatio) {
         best = f
       }
     }
@@ -126,15 +128,15 @@ export default function Forecast() {
       {
         day: 14, label: '+14d',
         forecast: selectedForecast.price_14d,
-        ci_lower: Math.round(selectedForecast.ci_lower_7d * 0.97),
-        ci_upper: Math.round(selectedForecast.ci_upper_7d * 1.03),
+        ci_lower: selectedForecast.ci_lower_14d,
+        ci_upper: selectedForecast.ci_upper_14d,
         seasonal: Math.round(seasonal),
       },
       {
         day: 30, label: '+30d',
         forecast: selectedForecast.price_30d,
-        ci_lower: Math.round(selectedForecast.ci_lower_7d * 0.94),
-        ci_upper: Math.round(selectedForecast.ci_upper_7d * 1.06),
+        ci_lower: selectedForecast.ci_lower_30d,
+        ci_upper: selectedForecast.ci_upper_30d,
         seasonal: Math.round(seasonal),
       },
     ]

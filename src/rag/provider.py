@@ -1,5 +1,5 @@
 """
-Hybrid FAISS + BM25 RAG provider for health supply chain knowledge.
+Hybrid FAISS + BM25 RAG provider for Tamil Nadu agricultural marketing knowledge.
 
 Uses sentence-transformers (all-MiniLM-L6-v2) for dense semantic embeddings
 indexed in FAISS (IndexFlatIP) and rank_bm25 for keyword matching, merged

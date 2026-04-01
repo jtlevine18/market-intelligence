@@ -301,7 +301,7 @@
     border-bottom: 2px solid #d4a019;
   }
 
-  /* ── Alert banner (stockout warnings) ── */
+  /* ── Alert banner ── */
   .alert-banner {
     @apply rounded-[10px] p-4 mb-6;
     background: linear-gradient(135deg, rgba(230, 57, 70, 0.06) 0%, rgba(230, 126, 34, 0.06) 100%);

@@ -31,7 +31,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from config import (
     COMMODITIES,
@@ -343,6 +343,7 @@ def _generate_demo_data() -> dict:
                 "ci_upper_30d": p30 + ci30,
                 "direction": direction,
                 "confidence": round(rng.uniform(0.65, 0.88), 2),
+                "seasonal_index": round(s_now, 2),
             })
 
             forecast_by_mandi[m.mandi_id][cid] = {
@@ -379,9 +380,11 @@ def _generate_demo_data() -> dict:
                 "market_price_rs": current_price,
                 "transport_cost_rs": round(transport, 0),
                 "storage_loss_rs": 0,
+                "storage_cost_rs": 0,
                 "mandi_fee_rs": round(mandi_fee, 0),
                 "net_price_rs": round(net_now, 0),
                 "distance_km": round(dist, 1),
+                "drive_time_min": round(dist / 30 * 60),
                 "confidence": 0.85,
                 "price_source": "current",
             })
@@ -392,6 +395,7 @@ def _generate_demo_data() -> dict:
                 loss_pct = POST_HARVEST_LOSS.get(farmer.primary_commodity, {}).get("storage_per_month", 2.5)
                 storage_loss = p7 * (loss_pct / 100) * (7 / 30)
                 net_7d = p7 - transport - p7 * MANDI_FEE_PCT / 100 - storage_loss
+                storage_cost = 20.0 * (7 / 30)
                 options.append({
                     "mandi_id": m.mandi_id,
                     "mandi_name": m.name,
@@ -399,9 +403,11 @@ def _generate_demo_data() -> dict:
                     "market_price_rs": p7,
                     "transport_cost_rs": round(transport, 0),
                     "storage_loss_rs": round(storage_loss, 0),
+                    "storage_cost_rs": round(storage_cost, 0),
                     "mandi_fee_rs": round(p7 * MANDI_FEE_PCT / 100, 0),
                     "net_price_rs": round(net_7d, 0),
                     "distance_km": round(dist, 1),
+                    "drive_time_min": round(dist / 30 * 60),
                     "confidence": 0.78,
                     "price_source": "forecasted",
                 })
@@ -481,13 +487,11 @@ def _generate_demo_data() -> dict:
     # ── Model metrics ──
     model_metrics = {
         "model_type": "xgboost",
-        "metrics": {
-            "rmse": 87.4,
-            "mae": 62.1,
-            "r_squared": 0.89,
-            "train_samples": 4200,
-            "features": 15,
-        },
+        "rmse": 87.4,
+        "mae": 62.1,
+        "r2": 0.89,
+        "directional_accuracy": 0.76,
+        "train_samples": 4200,
         "features": [
             "current_reconciled_price", "price_trend_7d", "seasonal_index",
             "mandi_arrival_volume_7d_avg", "rainfall_7d", "days_since_harvest",
@@ -717,7 +721,7 @@ def get_model_info():
         "primary_model": {
             "type": "XGBoost Regressor (200 estimators, 3 horizons: 7d/14d/30d)",
             "features": 15,
-            "metrics": model_metrics.get("metrics", {}),
+            "metrics": {k: model_metrics.get(k) for k in ("rmse", "mae", "r2", "directional_accuracy") if model_metrics.get(k) is not None},
         },
         "rag": {
             "type": "Hybrid FAISS + BM25 with sentence-transformers (all-MiniLM-L6-v2)",
@@ -858,7 +862,7 @@ if dist_path.exists():
     @app.get("/{path:path}")
     async def serve_spa(path: str):
         if path.startswith("api/") or path == "health":
-            return None
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         file_path = dist_path / path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))

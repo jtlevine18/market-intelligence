@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -109,7 +109,7 @@ class PipelineScheduler:
             result = asyncio.run(pipeline.run())
 
             self._state["total_runs"] = self._state.get("total_runs", 0) + 1
-            self._state["last_run_at"] = datetime.utcnow().isoformat()
+            self._state["last_run_at"] = datetime.now(timezone.utc).isoformat()
             self._state["last_status"] = result.status
             self._save_state()
 

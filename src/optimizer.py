@@ -506,4 +506,7 @@ def recommendation_to_dict(rec: SellRecommendation) -> dict:
         ],
         "potential_gain_rs": rec.potential_gain_rs,
         "recommendation_text": rec.recommendation_text,
+        "farmer_id": "",
+        "farmer_name": "",
+        "recommendation_tamil": "",
     }

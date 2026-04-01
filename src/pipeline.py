@@ -4,8 +4,7 @@ Post-Harvest Market Intelligence -- Main Pipeline Orchestrator
 6-step pipeline: INGEST -> EXTRACT -> RECONCILE -> FORECAST -> OPTIMIZE -> RECOMMEND
 
 Each step has independent fallbacks -- no cascading failures.
-Follows the same StepResult/PipelineRunResult pattern as the climate-risk-engine
-and health supply chain projects.
+Follows a common StepResult/PipelineRunResult pattern.
 """
 
 import asyncio
@@ -14,7 +13,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 from config import (
     COMMODITIES,
@@ -117,7 +116,7 @@ class MarketIntelligencePipeline:
     async def run(self) -> PipelineRunResult:
         """Execute the full 6-step pipeline."""
         run_id = str(uuid.uuid4())[:8]
-        started_at = datetime.utcnow()
+        started_at = datetime.now(timezone.utc)
 
         persistence.init_db()
         steps: list[StepResult] = []
@@ -496,7 +495,7 @@ class MarketIntelligencePipeline:
             self._forecasts = model.predict(features_df)
             self._model_metrics = {
                 "model_type": model_type,
-                "metrics": model.metrics,
+                **model.metrics,
                 "features": model.FEATURES,
                 "feature_importances": model.feature_importances,
             }
@@ -559,6 +558,8 @@ class MarketIntelligencePipeline:
                 rec_dict["credit_readiness"] = credit_readiness_to_dict(credit)
 
                 self._sell_recommendations[farmer.farmer_id] = rec_dict
+                self._sell_recommendations[farmer.farmer_id]["farmer_id"] = farmer.farmer_id
+                self._sell_recommendations[farmer.farmer_id]["farmer_name"] = farmer.name
 
             total_options = sum(
                 len(v.get("all_options", []))
@@ -632,7 +633,7 @@ class MarketIntelligencePipeline:
         steps: list[StepResult], status: str | None = None,
         total_cost: float = 0,
     ) -> PipelineRunResult:
-        ended_at = datetime.utcnow()
+        ended_at = datetime.now(timezone.utc)
         duration = (ended_at - started_at).total_seconds()
 
         if status is None:
@@ -703,7 +704,7 @@ class MarketIntelligencePipeline:
                     "mandi_id": fc.mandi_id,
                     "commodity_id": fc.commodity_id,
                     "commodity_name": commodity.get("name", fc.commodity_id),
-                    "current_price": fc.current_price,
+                    "current_price_rs": fc.current_price,
                     "price_7d": fc.price_7d,
                     "price_14d": fc.price_14d,
                     "price_30d": fc.price_30d,

@@ -59,6 +59,10 @@ export interface PriceForecast {
   price_30d: number
   ci_lower_7d: number
   ci_upper_7d: number
+  ci_lower_14d: number
+  ci_upper_14d: number
+  ci_lower_30d: number
+  ci_upper_30d: number
   direction: string
   confidence: number
   seasonal_index: number

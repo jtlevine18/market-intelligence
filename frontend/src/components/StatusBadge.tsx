@@ -13,6 +13,8 @@ const STATUS_MAP: Record<string, { className: string; label?: string }> = {
   poor: { className: 'badge-red' },
   ok: { className: 'badge-green' },
   success: { className: 'badge-green' },
+  active: { className: 'badge-green' },
+  partial: { className: 'badge-amber' },
   failed: { className: 'badge-red' },
   running: { className: 'badge-blue' },
   pending: { className: 'badge-slate' },

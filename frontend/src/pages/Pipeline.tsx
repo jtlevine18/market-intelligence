@@ -46,7 +46,7 @@ const PIPELINE_STEPS = [
     num: 5, name: 'Optimize', table: 'sell_options', color: '#C62828',
     desc: 'For each farmer, computes all (mandi, timing) combinations, accounting for transport costs, storage losses, mandi fees, and distance',
     options: [
-      { label: 'Route Optimization', note: 'Google Maps API for distance and drive time estimates', active: true },
+      { label: 'Route Optimization', note: 'Haversine + drive time estimation', active: true },
       { label: 'Cost Model', note: 'Transport, storage decay, commission fees per mandi', active: true },
     ],
   },
@@ -123,7 +123,7 @@ function CostBreakdown() {
     { component: 'AI: Price reconciliation', cost: 0.06, note: 'Resolving conflicts across sources' },
     { component: 'AI: Sell recommendations', cost: 0.05, note: 'Generating personalized advice' },
     { component: 'XGBoost forecasting', cost: 0, note: 'Local model inference' },
-    { component: 'Google Maps API', cost: 0.02, note: 'Distance and route calculations' },
+    { component: 'Haversine + drive time estimation', cost: 0, note: 'Distance and route calculations' },
     { component: 'Backend server', cost: 0, note: 'Cloud hosting (free tier)' },
   ]
   const total = costs.reduce((s, c) => s + c.cost, 0)
