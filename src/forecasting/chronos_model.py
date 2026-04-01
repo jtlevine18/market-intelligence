@@ -58,8 +58,8 @@ except ImportError as e:
 # Model selection priority:
 # 1. chronos-bolt-base (Bolt V2, ~250x faster on CPU) -- requires Chronos2Pipeline
 # 2. chronos-t5-small (V1, 20M params, solid CPU perf) -- always works with ChronosPipeline
-BOLT_MODEL_ID = "amazon/chronos-bolt-base"
-V1_MODEL_ID = "amazon/chronos-t5-small"
+BOLT_MODEL_ID = "amazon/chronos-bolt-tiny"
+V1_MODEL_ID = "amazon/chronos-t5-tiny"
 
 QUANTILE_LOW = 0.1   # 10th percentile for CI lower
 QUANTILE_MID = 0.5   # median for point forecast

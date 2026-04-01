@@ -17,7 +17,7 @@ COPY markets.json commodities.json farmers.json ./
 RUN mkdir -p models
 
 # Pre-download Chronos-2 model so pipeline doesn't download at runtime
-RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('amazon/chronos-bolt-base')" || true
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('amazon/chronos-bolt-tiny')" || true
 
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
 USER appuser
