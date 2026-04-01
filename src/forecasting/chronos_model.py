@@ -92,22 +92,37 @@ class ChronosForecaster:
         self._load_time_s: float = 0.0
         self._model_variant: str = ""  # "bolt" or "t5"
 
-    def load(self) -> bool:
-        """Load the Chronos pipeline. Tries Bolt V2, falls back to T5-small V1."""
+    def load(self, timeout_s: float = 300) -> bool:
+        """Load the Chronos pipeline. Tries Bolt V2, falls back to T5-small V1.
+
+        Args:
+            timeout_s: Max seconds to wait for model download/load (default 5 min).
+                       If exceeded, returns False so the pipeline falls back to XGBoost.
+        """
         if not CHRONOS_AVAILABLE:
             self._load_error = f"chronos-forecasting not installed: {_chronos_import_error}"
             log.warning("Chronos load skipped: %s", self._load_error)
             return False
 
+        import concurrent.futures
+
+        def _try_load_bolt():
+            return Chronos2Pipeline.from_pretrained(
+                BOLT_MODEL_ID, device_map=self._device, dtype=torch.float32,
+            )
+
+        def _try_load_t5():
+            return ChronosPipeline.from_pretrained(
+                V1_MODEL_ID, device_map=self._device, dtype=torch.float32,
+            )
+
         # Attempt 1: Chronos-Bolt (V2) via Chronos2Pipeline
         if CHRONOS2_AVAILABLE:
             try:
                 t0 = time.time()
-                self._pipeline = Chronos2Pipeline.from_pretrained(
-                    BOLT_MODEL_ID,
-                    device_map=self._device,
-                    dtype=torch.float32,
-                )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(_try_load_bolt)
+                    self._pipeline = future.result(timeout=timeout_s)
                 self._load_time_s = time.time() - t0
                 self._loaded = True
                 self._model_id = BOLT_MODEL_ID
@@ -117,17 +132,17 @@ class ChronosForecaster:
                     self._model_id, self._device, self._load_time_s,
                 )
                 return True
+            except concurrent.futures.TimeoutError:
+                log.warning("Chronos Bolt load timed out after %.0fs -- trying T5-small", timeout_s)
             except Exception as e:
                 log.info("Chronos Bolt load failed (%s) -- trying T5-small", e)
 
         # Attempt 2: Chronos T5-small (V1) via ChronosPipeline
         try:
             t0 = time.time()
-            self._pipeline = ChronosPipeline.from_pretrained(
-                V1_MODEL_ID,
-                device_map=self._device,
-                dtype=torch.float32,
-            )
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_try_load_t5)
+                self._pipeline = future.result(timeout=timeout_s)
             self._load_time_s = time.time() - t0
             self._loaded = True
             self._model_id = V1_MODEL_ID
@@ -137,6 +152,10 @@ class ChronosForecaster:
                 self._model_id, self._device, self._load_time_s,
             )
             return True
+        except concurrent.futures.TimeoutError:
+            self._load_error = f"All Chronos variants timed out after {timeout_s}s"
+            log.warning("Chronos load timed out -- falling back to XGBoost")
+            return False
         except Exception as e:
             self._load_error = str(e)
             log.warning("Chronos load failed (all variants): %s", e)
