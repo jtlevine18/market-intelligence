@@ -206,9 +206,10 @@ class XGBoostPriceModel:
             mandi_id = row.get("mandi_id", "")
 
             # Predict median
-            p7 = float(self._model_7d.predict(X.iloc[[i]])[0]) if self._model_7d else current_price
-            p14 = float(self._model_14d.predict(X.iloc[[i]])[0]) if self._model_14d else current_price
-            p30 = float(self._model_30d.predict(X.iloc[[i]])[0]) if self._model_30d else current_price
+            xi = X.loc[[i]] if i in X.index else X.iloc[[0]]
+            p7 = float(self._model_7d.predict(xi)[0]) if self._model_7d else current_price
+            p14 = float(self._model_14d.predict(xi)[0]) if self._model_14d else current_price
+            p30 = float(self._model_30d.predict(xi)[0]) if self._model_30d else current_price
 
             # Confidence intervals (heuristic: wider for longer horizons)
             vol = row.get("price_volatility_30d", 0.05)
@@ -776,7 +777,7 @@ class ChronosXGBoostForecaster:
             # If no history for this pair, fall back to XGBoost for this row
             if history is None or len(history) < 10:
                 if self._xgb_model.is_trained():
-                    row_forecasts = self._xgb_model.predict(features.iloc[[i]])
+                    row_forecasts = self._xgb_model.predict(features.loc[[i]])
                     if row_forecasts:
                         forecasts.append(row_forecasts[0])
                         continue
@@ -792,7 +793,7 @@ class ChronosXGBoostForecaster:
             except Exception as e:
                 log.debug("Chronos-2 predict failed for %s: %s -- using XGBoost", key, e)
                 if self._xgb_model.is_trained():
-                    row_forecasts = self._xgb_model.predict(features.iloc[[i]])
+                    row_forecasts = self._xgb_model.predict(features.loc[[i]])
                     if row_forecasts:
                         forecasts.append(row_forecasts[0])
                         continue
@@ -809,7 +810,7 @@ class ChronosXGBoostForecaster:
             p30_raw = cr_30.median if cr_30 else current_price
 
             # Apply XGBoost MOS correction (residual)
-            xi = X.iloc[[i]] if i in X.index else X.iloc[[0]]
+            xi = X.loc[[i]] if i in X.index else X.iloc[[0]]
             mos_7 = float(self._xgb_mos_7d.predict(xi)[0]) if self._xgb_mos_7d else 0.0
             mos_14 = float(self._xgb_mos_14d.predict(xi)[0]) if self._xgb_mos_14d else 0.0
             mos_30 = float(self._xgb_mos_30d.predict(xi)[0]) if self._xgb_mos_30d else 0.0
