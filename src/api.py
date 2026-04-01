@@ -1123,6 +1123,11 @@ def trigger_pipeline():
     return scheduler.trigger()
 
 
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    return scheduler.progress
+
+
 @app.get("/api/db/health")
 def db_health():
     from src.db import health_check
@@ -1180,11 +1185,89 @@ def status_page():
   .link {{ color: #2a9d8f; text-decoration: none; font-weight: 600; }}
   .link:hover {{ text-decoration: underline; }}
   .footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #e0dcd5; font-size: 0.75rem; color: #aaa; }}
+  .pipeline-tracker {{ background: #fff; border: 1px solid #e0dcd5; border-radius: 8px; padding: 16px; margin-bottom: 24px; }}
+  .pipeline-tracker h3 {{ font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #0d7377; margin-bottom: 12px; }}
+  .step-row {{ display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 0.82rem; }}
+  .step-dot {{ width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }}
+  .step-dot.done {{ background: #2a9d8f; }}
+  .step-dot.active {{ background: #d4a019; animation: pulse 1.2s infinite; }}
+  .step-dot.pending {{ background: #e0dcd5; }}
+  .step-dot.failed {{ background: #e63946; }}
+  .step-name {{ font-weight: 600; min-width: 110px; }}
+  .step-time {{ color: #888; font-size: 0.75rem; }}
+  .step-status {{ color: #888; font-size: 0.75rem; }}
+  .trigger-btn {{ background: #0d7377; color: #fff; border: none; padding: 8px 18px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; margin-top: 10px; }}
+  .trigger-btn:hover {{ background: #0a5c5f; }}
+  .trigger-btn:disabled {{ background: #ccc; cursor: not-allowed; }}
+  @keyframes pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.4; }} }}
 </style>
 </head>
 <body>
   <h1>Market Intelligence Agent <span class="status">Running</span></h1>
   <p class="subtitle">AI-powered market timing for Tamil Nadu smallholder farmers</p>
+
+  <div class="pipeline-tracker" id="tracker">
+    <h3>Pipeline</h3>
+    <div id="steps-container">Loading...</div>
+    <button class="trigger-btn" id="trigger-btn" onclick="triggerPipeline()">Run Pipeline</button>
+  </div>
+
+  <script>
+  const STEPS = ['ingest', 'extract', 'reconcile', 'forecast', 'optimize', 'recommend'];
+  const LABELS = {{
+    ingest: 'Price Collection', extract: 'Price Extraction', reconcile: 'Conflict Reconciliation',
+    forecast: 'Price Forecasting', optimize: 'Sell Optimization', recommend: 'Farmer Recommendation'
+  }};
+
+  function renderSteps(data) {{
+    const completed = (data.completed_steps || []).map(s => s.step);
+    const current = data.current_step;
+    const running = data.running;
+    let html = '';
+
+    for (const step of STEPS) {{
+      const done = completed.includes(step);
+      const active = current === step;
+      const cls = done ? 'done' : active ? 'active' : 'pending';
+      const info = (data.completed_steps || []).find(s => s.step === step);
+      const time = info ? info.duration_s + 's' : active ? 'running...' : '';
+      const statusText = done ? info?.status || 'ok' : active ? 'running' : '';
+      html += '<div class="step-row">'
+        + '<div class="step-dot ' + cls + '"></div>'
+        + '<span class="step-name">' + (LABELS[step] || step) + '</span>'
+        + '<span class="step-time">' + time + '</span>'
+        + '<span class="step-status">' + statusText + '</span>'
+        + '</div>';
+    }}
+
+    if (!running && data.last_status) {{
+      html += '<div style="margin-top:8px;font-size:0.75rem;color:#888;">Last run: '
+        + (data.last_run_at || 'never') + ' — ' + (data.last_status || '') + '</div>';
+    }}
+
+    document.getElementById('steps-container').innerHTML = html;
+    document.getElementById('trigger-btn').disabled = running;
+    document.getElementById('trigger-btn').textContent = running ? 'Running...' : 'Run Pipeline';
+  }}
+
+  async function fetchStatus() {{
+    try {{
+      const r = await fetch('/api/pipeline/status');
+      const data = await r.json();
+      renderSteps(data);
+      if (data.running) setTimeout(fetchStatus, 3000);
+      else setTimeout(fetchStatus, 15000);
+    }} catch(e) {{ setTimeout(fetchStatus, 5000); }}
+  }}
+
+  async function triggerPipeline() {{
+    document.getElementById('trigger-btn').disabled = true;
+    await fetch('/api/pipeline/trigger', {{ method: 'POST' }});
+    setTimeout(fetchStatus, 1000);
+  }}
+
+  fetchStatus();
+  </script>
 
   <div class="grid">
     <div class="card"><div class="label">Mandis</div><div class="value">{n_mandis}</div></div>

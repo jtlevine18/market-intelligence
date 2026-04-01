@@ -31,6 +31,11 @@ class PipelineScheduler:
         self._running = False
         self._lock = threading.Lock()
         self._state = self._load_state()
+        # Live progress tracking
+        self._current_step: str | None = None
+        self._step_started_at: str | None = None
+        self._completed_steps: list[dict] = []
+        self._run_started_at: str | None = None
 
     def _load_state(self) -> dict:
         """Load persisted scheduler state."""
@@ -95,10 +100,14 @@ class PipelineScheduler:
 
     def _run_pipeline(self):
         """Execute a pipeline run (called by scheduler or manual trigger)."""
+        self._completed_steps = []
+        self._current_step = "initializing"
+        self._run_started_at = datetime.now(timezone.utc).isoformat()
+
         try:
             import asyncio
             import os
-            import sys
+            import time
             print("[PIPELINE] Starting pipeline run", flush=True)
             has_claude = bool(os.getenv("ANTHROPIC_API_KEY"))
             print(f"[PIPELINE] Claude API: {'enabled' if has_claude else 'disabled'}", flush=True)
@@ -108,6 +117,8 @@ class PipelineScheduler:
                 use_claude_reconciliation=has_claude,
                 use_claude_recommender=has_claude,
             )
+            # Attach progress callback
+            pipeline._progress_cb = self._on_step_progress
             result = asyncio.run(pipeline.run())
 
             self._state["total_runs"] = self._state.get("total_runs", 0) + 1
@@ -115,6 +126,7 @@ class PipelineScheduler:
             self._state["last_status"] = result.status
             self._save_state()
 
+            self._current_step = None
             print(f"[PIPELINE] Complete -- status={result.status}, duration={result.duration_s:.1f}s, cost=${result.total_cost_usd:.4f}", flush=True)
             for s in result.steps:
                 print(f"[PIPELINE]   {s.step}: {s.status} ({s.duration_s:.1f}s) {s.errors or ''}", flush=True)
@@ -122,10 +134,36 @@ class PipelineScheduler:
             print(f"[PIPELINE] FAILED: {exc}", flush=True)
             import traceback
             traceback.print_exc()
+            self._current_step = None
             self._state["last_status"] = "failed"
             self._save_state()
         finally:
             self._running = False
+
+    def _on_step_progress(self, step: str, status: str, duration_s: float = 0):
+        """Callback from pipeline to track step progress."""
+        if status == "started":
+            self._current_step = step
+            self._step_started_at = datetime.now(timezone.utc).isoformat()
+            print(f"[PIPELINE] Step: {step} -- started", flush=True)
+        elif status in ("ok", "skipped", "failed"):
+            self._completed_steps.append({
+                "step": step, "status": status, "duration_s": round(duration_s, 1),
+            })
+            self._current_step = None
+            print(f"[PIPELINE] Step: {step} -- {status} ({duration_s:.1f}s)", flush=True)
+
+    @property
+    def progress(self) -> dict:
+        """Current pipeline progress for the status page."""
+        return {
+            "running": self._running,
+            "current_step": self._current_step,
+            "step_started_at": self._step_started_at,
+            "completed_steps": self._completed_steps,
+            "run_started_at": self._run_started_at,
+            **self._state,
+        }
 
     @property
     def is_running(self) -> bool:

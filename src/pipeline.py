@@ -115,6 +115,7 @@ class MarketIntelligencePipeline:
         self._extraction_tokens: int = 0
         self._reconciliation_tokens: int = 0
         self._recommendation_tokens: int = 0
+        self._progress_cb = None  # optional callback: fn(step, status, duration_s)
 
     async def run(self) -> PipelineRunResult:
         """Execute the full 6-step pipeline."""
@@ -133,33 +134,41 @@ class MarketIntelligencePipeline:
             run_id, len(MANDIS), len(COMMODITIES), self.days_back,
         )
 
+        async def _run_step(name, coro):
+            if self._progress_cb:
+                self._progress_cb(name, "started")
+            result = await coro
+            if self._progress_cb:
+                self._progress_cb(name, result.status, result.duration_s)
+            return result
+
         # Step 1: INGEST
-        step1 = await self._step_ingest(run_id)
+        step1 = await _run_step("ingest", self._step_ingest(run_id))
         steps.append(step1)
         if step1.status == "failed":
             logger.error("Ingestion failed completely -- aborting pipeline")
             return self._finalize(run_id, started_at, steps, "failed")
 
         # Step 2: EXTRACT
-        step2 = await self._step_extract(run_id)
+        step2 = await _run_step("extract", self._step_extract(run_id))
         steps.append(step2)
         total_cost += step2.details.get("cost_usd", 0)
 
         # Step 3: RECONCILE
-        step3 = await self._step_reconcile(run_id)
+        step3 = await _run_step("reconcile", self._step_reconcile(run_id))
         steps.append(step3)
         total_cost += step3.details.get("cost_usd", 0)
 
         # Step 4: FORECAST
-        step4 = await self._step_forecast(run_id)
+        step4 = await _run_step("forecast", self._step_forecast(run_id))
         steps.append(step4)
 
         # Step 5: OPTIMIZE
-        step5 = await self._step_optimize(run_id)
+        step5 = await _run_step("optimize", self._step_optimize(run_id))
         steps.append(step5)
 
         # Step 6: RECOMMEND
-        step6 = await self._step_recommend(run_id)
+        step6 = await _run_step("recommend", self._step_recommend(run_id))
         steps.append(step6)
         total_cost += step6.details.get("cost_usd", 0)
 
