@@ -681,27 +681,47 @@ class MarketIntelligencePipeline:
 
             # Market prices (reconciled)
             market_prices = []
+            today_str = date.today().isoformat()
             for mid, commodities in self._reconciled_data.items():
                 mandi = MANDI_MAP.get(mid)
                 for cid, price_data in commodities.items():
                     commodity = COMMODITY_MAP.get(cid, {})
+                    reconciled = price_data.get("price_rs", 0)
                     market_prices.append({
                         "mandi_id": mid,
                         "mandi_name": mandi.name if mandi else mid,
                         "commodity_id": cid,
                         "commodity_name": commodity.get("name", cid),
-                        "price_rs": price_data.get("price_rs", 0),
+                        "category": commodity.get("category", ""),
+                        "price_rs": reconciled,
+                        "agmarknet_price_rs": price_data.get("agmarknet_price"),
+                        "enam_price_rs": price_data.get("enam_price"),
+                        "reconciled_price_rs": reconciled,
                         "confidence": price_data.get("confidence", 0),
+                        "price_trend": "flat",
+                        "date": today_str,
                         "source_used": price_data.get("source_used", ""),
                         "reasoning": price_data.get("reasoning", ""),
                     })
+
+            # Build forecast direction lookup for price_trend
+            forecast_dir = {}
+            for fc in self._forecasts:
+                forecast_dir[(fc.mandi_id, fc.commodity_id)] = fc.direction
+            # Back-fill price_trend on market_prices
+            for mp in market_prices:
+                mp["price_trend"] = forecast_dir.get(
+                    (mp["mandi_id"], mp["commodity_id"]), "flat"
+                )
 
             # Price forecasts
             price_forecasts = []
             for fc in self._forecasts:
                 commodity = COMMODITY_MAP.get(fc.commodity_id, {})
+                mandi = MANDI_MAP.get(fc.mandi_id)
                 price_forecasts.append({
                     "mandi_id": fc.mandi_id,
+                    "mandi_name": mandi.name if mandi else fc.mandi_id,
                     "commodity_id": fc.commodity_id,
                     "commodity_name": commodity.get("name", fc.commodity_id),
                     "current_price_rs": fc.current_price,
