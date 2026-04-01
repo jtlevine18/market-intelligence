@@ -11,20 +11,26 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download Chronos-2 model into HF cache so pipeline loads from disk
-# Must run AFTER pip install (needs huggingface_hub + chronos-forecasting)
+# Create appuser first so we can download the model to the right cache dir
+RUN adduser --disabled-password --gecos '' appuser
+
+# Pre-download Chronos-2 model as appuser so cache lands in /home/appuser/
+USER appuser
+ENV HF_HOME=/home/appuser/.cache/huggingface
 RUN python -c "\
 from huggingface_hub import snapshot_download; \
-print('Downloading chronos-bolt-base...'); \
+print('Downloading chronos-bolt-tiny...'); \
 snapshot_download('amazon/chronos-bolt-tiny'); \
-print('Done.')" && echo "Chronos model cached" || echo "WARN: Chronos pre-download failed"
+print('Chronos model cached.')"
 
+# Switch back to root to copy files and set permissions
+USER root
 COPY config.py .
 COPY src/ src/
 COPY markets.json commodities.json farmers.json ./
 RUN mkdir -p models
+RUN chown -R appuser:appuser /app
 
-RUN adduser --disabled-password --gecos '' appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 7860
