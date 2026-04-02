@@ -118,7 +118,7 @@ export default function App() {
         callback={handleJoyrideCallback}
         styles={tourStyles}
         tooltipComponent={TourTooltip}
-        floaterProps={{ disableAnimation: true }}
+        floaterProps={{ disableAnimation: false }}
         locale={{
           back: 'Back',
           close: 'Close',
