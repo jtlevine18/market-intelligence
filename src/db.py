@@ -33,6 +33,7 @@ from sqlalchemy import (
     create_engine,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class PipelineRun(Base):
     commodities_count = Column(Integer, default=0)
     step_results = Column(Text)
     errors = Column(Text)
+    price_conflicts = Column(JSONB)
 
 
 class MarketPrice(Base):
@@ -75,6 +77,7 @@ class MarketPrice(Base):
     price_rs = Column(Float)
     arrivals_tonnes = Column(Float)
     quality_flag = Column(String(20))
+    full_data = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -106,6 +109,7 @@ class SellRecommendation(Base):
     net_price_rs = Column(Float)
     potential_gain_rs = Column(Float)
     recommendation_text = Column(Text)
+    full_data = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -215,10 +219,11 @@ def save_pipeline_run(run_result: dict) -> bool:
             )),
             step_results=json.dumps(run_info.get("steps", {})),
             errors=json.dumps(run_info.get("errors", [])),
+            price_conflicts=run_result.get("price_conflicts", []),
         )
         session.add(run)
 
-        # Save market prices
+        # Save market prices (with full data blob)
         for mp in run_result.get("market_prices", []):
             session.add(MarketPrice(
                 run_id=run.run_id,
@@ -229,6 +234,7 @@ def save_pipeline_run(run_result: dict) -> bool:
                 price_rs=mp.get("price_rs"),
                 arrivals_tonnes=mp.get("arrivals_tonnes"),
                 quality_flag=mp.get("quality_flag", ""),
+                full_data=mp,
             ))
 
         # Save price forecasts
@@ -248,7 +254,7 @@ def save_pipeline_run(run_result: dict) -> bool:
                         model_type=run_result.get("model_metrics", {}).get("model_type", ""),
                     ))
 
-        # Save sell recommendations
+        # Save sell recommendations (with full data blob)
         for rec in run_result.get("sell_recommendations", []):
             best = rec.get("best_option", {})
             session.add(SellRecommendation(
@@ -260,6 +266,7 @@ def save_pipeline_run(run_result: dict) -> bool:
                 net_price_rs=best.get("net_price_rs"),
                 potential_gain_rs=rec.get("potential_gain_rs"),
                 recommendation_text=rec.get("recommendation_text", ""),
+                full_data=rec,
             ))
 
         # Save agent traces
