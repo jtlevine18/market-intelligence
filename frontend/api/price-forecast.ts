@@ -3,7 +3,7 @@ import { getDb } from './_db'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const sql = getDb()
+    const sql = await getDb()
     const forecasts = await sql`
       SELECT DISTINCT ON (mandi_id, commodity_id, horizon_days)
         run_id, mandi_id, commodity_id, forecast_date, horizon_days,

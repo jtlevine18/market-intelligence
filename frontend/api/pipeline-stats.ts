@@ -3,7 +3,7 @@ import { getDb } from './_db'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const sql = getDb()
+    const sql = await getDb()
 
     const runs = await sql`
       SELECT run_id, started_at, status, duration_sec, total_cost_usd,

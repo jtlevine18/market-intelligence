@@ -3,7 +3,7 @@ import { getDb } from './_db'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const sql = getDb()
+    const sql = await getDb()
     const result = await sql`SELECT count(*) as n FROM pipeline_runs`
     const hasData = Number(result[0]?.n) > 0
 
