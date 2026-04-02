@@ -3,7 +3,12 @@ name: Weekly Pipeline Run
 on:
   schedule:
     - cron: '0 1 * * 1'  # Monday 01:00 UTC = 06:30 IST
-  workflow_dispatch: {}    # Manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      retrain:
+        description: 'Force MOS retrain after pipeline run'
+        type: boolean
+        default: false
 
 jobs:
   trigger-pipeline:
@@ -34,13 +39,14 @@ jobs:
           ELAPSED=0
           INTERVAL=30
           while [ $ELAPSED -lt $MAX_WAIT ]; do
-            HEALTH=$(curl -s "https://jtlevine-market-intelligence.hf.space/health" 2>/dev/null || echo '{}')
-            HAS_DATA=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('pipeline_data', False))" 2>/dev/null || echo "false")
-            echo "[$ELAPSED s] pipeline_data: $HAS_DATA"
-            if [ "$HAS_DATA" = "True" ]; then
-              echo "Pipeline completed successfully!"
-              STATS=$(curl -s "https://jtlevine-market-intelligence.hf.space/api/pipeline/stats" 2>/dev/null || echo '{}')
-              echo "Stats: $STATS"
+            STATUS=$(curl -s "https://jtlevine-market-intelligence.hf.space/api/pipeline/status" 2>/dev/null || echo '{}')
+            RUNNING=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running', True))" 2>/dev/null || echo "true")
+            STEP=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('current_step', '?'))" 2>/dev/null || echo "?")
+            echo "[$ELAPSED s] running: $RUNNING, step: $STEP"
+            if [ "$RUNNING" = "False" ]; then
+              echo "Pipeline completed!"
+              HEALTH=$(curl -s "https://jtlevine-market-intelligence.hf.space/health" 2>/dev/null || echo '{}')
+              echo "Health: $HEALTH"
               exit 0
             fi
             sleep $INTERVAL
@@ -48,6 +54,26 @@ jobs:
           done
           echo "Timed out waiting for pipeline"
           exit 1
+
+      - name: Monthly MOS retrain
+        if: success()
+        run: |
+          # Retrain on 4th Monday of each month, or if manually requested
+          DAY=$(date +%d)
+          FORCE_RETRAIN="${{ github.event.inputs.retrain }}"
+
+          if [ "$DAY" -ge 22 ] || [ "$FORCE_RETRAIN" = "true" ]; then
+            echo "Triggering MOS retrain..."
+            RESULT=$(curl -s -X POST \
+              "https://jtlevine-market-intelligence.hf.space/api/pipeline/retrain-mos" \
+              -H "Content-Type: application/json")
+            echo "Retrain response: $RESULT"
+            echo "Waiting 60s for retrain to complete..."
+            sleep 60
+            echo "MOS retrain done (check Space logs for details)"
+          else
+            echo "Not 4th week (day=$DAY) — skipping retrain"
+          fi
 
       - name: Pause HF Space
         if: always()

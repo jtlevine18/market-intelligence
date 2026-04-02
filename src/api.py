@@ -1128,6 +1128,25 @@ def pipeline_status():
     return scheduler.progress
 
 
+@app.post("/api/pipeline/retrain-mos")
+def retrain_mos():
+    """Retrain XGBoost MOS models from accumulated Neon data."""
+    import threading
+
+    def _run_retrain():
+        try:
+            from scripts.retrain_mos import main
+            print("[RETRAIN] Starting MOS retrain from Neon data", flush=True)
+            main()
+            print("[RETRAIN] MOS retrain complete", flush=True)
+        except Exception as e:
+            print(f"[RETRAIN] Failed: {e}", flush=True)
+
+    thread = threading.Thread(target=_run_retrain, daemon=True)
+    thread.start()
+    return {"status": "triggered", "message": "MOS retrain started in background"}
+
+
 @app.get("/api/db/health")
 def db_health():
     from src.db import health_check
