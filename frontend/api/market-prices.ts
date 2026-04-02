@@ -1,9 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getDb } from './_db'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const sql = await getDb()
+    const dbUrl = process.env.DATABASE_URL
+    if (!dbUrl) return res.status(500).json({ error: 'DATABASE_URL not set' })
+    const { neon } = await import('@neondatabase/serverless')
+    const sql = neon(dbUrl)
+
     const prices = await sql`
       SELECT DISTINCT ON (mandi_id, commodity_id)
         run_id, mandi_id, commodity_id, date, source, price_rs,
@@ -12,10 +15,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ORDER BY mandi_id, commodity_id, created_at DESC
     `
 
-    // Enrich with mandi/commodity names from config
     const enriched = prices.map((p: any) => ({
       mandi_id: p.mandi_id,
-      mandi_name: p.mandi_id, // Frontend can map these via /api/mandis
+      mandi_name: p.mandi_id,
       commodity_id: p.commodity_id,
       commodity_name: p.commodity_id,
       price_rs: p.price_rs,

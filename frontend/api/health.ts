@@ -1,27 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getDb } from './_db'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const sql = await getDb()
+    const dbUrl = process.env.DATABASE_URL
+    if (!dbUrl) return res.json({ status: 'ok', pipeline_data: false, error: 'no DATABASE_URL' })
+    const { neon } = await import('@neondatabase/serverless')
+    const sql = neon(dbUrl)
     const result = await sql`SELECT count(*) as n FROM pipeline_runs`
-    const hasData = Number(result[0]?.n) > 0
-
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.json({
-      status: 'ok',
-      service: 'market-intelligence-agent',
-      version: '1.0.0',
-      pipeline_data: hasData,
-      source: 'neon',
-    })
+    res.json({ status: 'ok', pipeline_data: Number(result[0]?.n) > 0, runs: Number(result[0]?.n), source: 'neon' })
   } catch (e: any) {
-    res.json({
-      status: 'ok',
-      service: 'market-intelligence-agent',
-      version: '1.0.0',
-      pipeline_data: false,
-      source: 'neon-error',
-    })
+    res.json({ status: 'ok', pipeline_data: false, error: e.message })
   }
 }

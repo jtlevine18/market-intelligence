@@ -1,9 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getDb } from './_db'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const sql = await getDb()
+    const dbUrl = process.env.DATABASE_URL
+    if (!dbUrl) return res.status(500).json({ error: 'DATABASE_URL not set' })
+    const { neon } = await import('@neondatabase/serverless')
+    const sql = neon(dbUrl)
     const recs = await sql`
       SELECT DISTINCT ON (farmer_id)
         run_id, farmer_id, commodity_id, best_mandi_id, best_timing,
