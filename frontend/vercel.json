@@ -2,5 +2,14 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/api/market-prices", "destination": "/api/market-prices" },
+    { "source": "/api/price-forecast", "destination": "/api/price-forecast" },
+    { "source": "/api/sell-recommendations", "destination": "/api/sell-recommendations" },
+    { "source": "/api/pipeline/stats", "destination": "/api/pipeline-stats" },
+    { "source": "/api/pipeline/runs", "destination": "/api/pipeline-runs" },
+    { "source": "/api/mandis", "destination": "/api/mandis" },
+    { "source": "/health", "destination": "/api/health" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
 }
